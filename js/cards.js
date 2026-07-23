@@ -8,7 +8,7 @@ const Cards = (() => {
     magnify:  { name: "Magnifying Glass", emoji: "🔍", kind: "magnify" },
     gun1:     { name: "-1s Gun",          emoji: "🔫", kind: "projectile", amount: -1 },
     gun3:     { name: "-3s Gun",          emoji: "🔥", kind: "projectile", amount: -3 },
-    gun5:     { name: "-5s Gun",          emoji: "💣", kind: "projectile", amount: -5 },
+    gun5:     { name: "-5s Gun",          emoji: "🔫", kind: "projectile", amount: -5 },
     repair5:  { name: "+5s Repair Kit",   emoji: "🧰", kind: "projectile", amount: +5 },
     repair10: { name: "+10s Repair Kit",  emoji: "🛠️", kind: "projectile", amount: +10 },
     speedup:  { name: "Speed Up Stopwatch",  emoji: "⏩", kind: "speed", mult: CONFIG.FastBombMultiplier, duration: CONFIG.FastBombDuration },

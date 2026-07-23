@@ -678,6 +678,9 @@ const Sim = (() => {
           aimX: equipped ? p.aim.x : null,
           aimY: equipped ? p.aim.y : null,
           revealing: p.revealRemaining > 0,  // using a Magnifying Glass right now — visible to everyone (not the reading itself)
+          // Currently inside the holder-bonus income window — visible to
+          // everyone so the extra coin trickle can be shown as a particle cue.
+          earningBonus: !!(b && b.holderId === p.id && p.holdElapsed < C.BombHolderCoinDuration),
         };
       }),
       you: viewer ? {

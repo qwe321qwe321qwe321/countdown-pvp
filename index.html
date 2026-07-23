@@ -95,6 +95,7 @@
 
   <div id="screen-join" class="screen">
     <div class="panel row">
+      <input type="text" id="joinName" placeholder="Your name" value="Player" maxlength="16">
       <input type="text" id="joinCode" placeholder="Room code" maxlength="8">
       <button class="primary" id="btnJoinConnect">Connect</button>
       <span id="joinStatus"></span>
@@ -110,7 +111,6 @@
 
   <div id="screen-game" class="screen">
     <div id="hud">
-      <div id="coinDisplay"></div>
       <div id="statusLine"></div>
     </div>
     <div id="gameBar">
@@ -129,6 +129,7 @@
           <div id="aimHint">🎯 AIMING — click the table to fire, right-click/Esc to cancel</div>
           <div class="row" style="margin-top:8px; justify-content:center">
             <button id="btnDraw">Draw Card (R)</button>
+            <div id="coinDisplay"></div>
             <button id="btnPass">Pass Bomb (Space)</button>
             <label style="font-size:12px"><input type="checkbox" id="chkDebug"> Debug UI (dev only)</label>
           </div>

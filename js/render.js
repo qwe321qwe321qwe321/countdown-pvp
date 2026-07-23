@@ -70,6 +70,10 @@ const Render = (() => {
         ctx.textAlign = "center";
         ctx.fillText("🔍", p.x + C.PlayerBodyRadius + 4, p.y - C.PlayerBodyRadius - 6);
       }
+
+      // Bonus-income cue: little coins drifting up while the holder-bonus
+      // window is open, gone the instant it stops (pass it off / window ends).
+      if (p.alive && p.earningBonus) drawCoinParticles(ctx, p, snap.time);
     }
 
     // Arms: body -> hands -> bomb, only for the current holder, and only
@@ -191,6 +195,26 @@ const Render = (() => {
     ctx.lineTo(hx + dx * C.AimLineLength, hy + dy * C.AimLineLength);
     ctx.stroke();
     ctx.restore();
+  }
+
+  // Deterministic little coin puffs rising off a player, driven purely by
+  // snap.time so it needs no particle-system state of its own — matches the
+  // rest of this module's "render is a pure function of snap" approach.
+  function drawCoinParticles(ctx, p, time) {
+    const seed = (p.seat * 37) % 100;
+    const COUNT = 3, PERIOD = 0.9;
+    for (let i = 0; i < COUNT; i++) {
+      const phase = (seed + i * 33.3) % 100 / 100;
+      const t = ((time / PERIOD + phase) % 1 + 1) % 1; // 0..1 loop
+      const rise = t * 34;
+      const drift = Math.sin((t + phase) * Math.PI * 2) * 8;
+      const alpha = 1 - t;
+      ctx.font = `${10 + t * 4}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.globalAlpha = alpha;
+      ctx.fillText("🪙", p.x + drift, p.y - C.PlayerBodyRadius - 6 - rise);
+      ctx.globalAlpha = 1;
+    }
   }
 
   function drawBomb(ctx, snap) {

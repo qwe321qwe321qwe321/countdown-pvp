@@ -184,6 +184,10 @@
     return ($("playerName").value.trim() || "Player").slice(0, 16);
   }
 
+  function joinPlayerName() {
+    return ($("joinName").value.trim() || "Player").slice(0, 16);
+  }
+
   // ---- Seat list rendering (lobby) ----
 
   const SEAT_COLORS = ["#e6604c", "#4c9be6", "#5cc46a", "#e6c14c", "#b06ce6", "#e68b4c", "#4ce6d4", "#e64ca8"];
@@ -273,6 +277,7 @@
   // ---- Join flow ----
 
   $("btnGoJoin").onclick = () => {
+    $("joinName").value = playerName();
     show("join");
     $("joinStatus").textContent = "";
   };
@@ -285,7 +290,7 @@
 
     clientSession = Client.createSession({
       code,
-      name: playerName(),
+      name: joinPlayerName(),
       collector,
       onWelcome: id => { myId = id; show("client-lobby"); },
       onReject: reason => { $("joinStatus").textContent = "Rejected: " + reason; },
