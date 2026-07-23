@@ -57,6 +57,147 @@
   let myId = null;
   let latestSnap = null;
 
+  // ---- Client-side smoothing (interpolation) + local prediction ------------
+  // The host is authoritative and only sends snapshots at CONFIG.SnapshotRate
+  // (20 Hz). A client that draws the newest snapshot raw sees remote motion
+  // jump ~50 ms at a time, and its *own* arm/aim lag by a full round-trip.
+  // Two fixes, both client-only (the host renders its own sim at 60 Hz with no
+  // network in the loop, so it needs neither):
+  //   ② interpolation: buffer snapshots and render ~2 frames in the past,
+  //      lerping bomb/projectile/aim positions between the two straddling it.
+  //   ① prediction: for the local player, drive the held bomb's arm offset and
+  //      the weapon/magnify aim straight from the live mouse, so they respond
+  //      instantly instead of after a round-trip.
+  const snapBuffer = [];      // [{ t: receive ms, snap }], oldest first (client only)
+  const InterpDelayMs = 2000 / CONFIG.SnapshotRate; // straddle two samples
+  let predOffset = null;      // predicted local held-bomb arm offset {x,y}
+  let lastFrameMs = performance.now();
+
+  function pushClientSnap(snap) {
+    snapBuffer.push({ t: performance.now(), snap });
+    // Keep a small window; never drop below 2 so we can always interpolate.
+    while (snapBuffer.length > 12) snapBuffer.shift();
+  }
+
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const clamp01 = t => t < 0 ? 0 : t > 1 ? 1 : t;
+
+  // The interpolated view at renderT = now - InterpDelayMs: discrete state
+  // (phase, holder, hand, events…) comes from the older straddling snapshot;
+  // continuous positions are lerped toward the newer one.
+  function sampleInterpolated(nowMs) {
+    if (snapBuffer.length === 0) return null;
+    if (snapBuffer.length === 1) return snapBuffer[0].snap;
+    const renderT = nowMs - InterpDelayMs;
+    if (renderT <= snapBuffer[0].t) return snapBuffer[0].snap;
+    let i = snapBuffer.length - 1; // default: renderT past newest → freeze there
+    for (let k = 0; k < snapBuffer.length - 1; k++) {
+      if (snapBuffer[k].t <= renderT && renderT < snapBuffer[k + 1].t) { i = k; break; }
+    }
+    const a = snapBuffer[i], b = snapBuffer[i + 1];
+    if (!b) return a.snap;
+    const span = b.t - a.t;
+    return lerpSnap(a.snap, b.snap, clamp01(span > 0 ? (renderT - a.t) / span : 0));
+  }
+
+  function lerpSnap(s0, s1, t) {
+    const out = Object.assign({}, s0); // discrete fields as-of s0
+
+    if (s0.bomb && s1.bomb) {
+      out.bomb = Object.assign({}, s0.bomb, {
+        x: lerp(s0.bomb.x, s1.bomb.x, t),
+        y: lerp(s0.bomb.y, s1.bomb.y, t),
+      });
+    }
+
+    // Seats never move; only a raised weapon/magnify aim does.
+    out.players = s0.players.map(p0 => {
+      const p1 = s1.players.find(q => q.id === p0.id);
+      if (!p1) return p0;
+      if (p0.aimX != null && p1.aimX != null) {
+        return Object.assign({}, p0, { aimX: lerp(p0.aimX, p1.aimX, t), aimY: lerp(p0.aimY, p1.aimY, t) });
+      }
+      if (p0.aimX == null && p1.aimX != null) {
+        return Object.assign({}, p0, { aimX: p1.aimX, aimY: p1.aimY });
+      }
+      return p0;
+    });
+
+    // Projectiles matched by id so each is lerped along its own path.
+    const m1 = new Map(s1.projectiles.map(pr => [pr.id, pr]));
+    const seen = new Set();
+    const proj = [];
+    for (const p0 of s0.projectiles) {
+      seen.add(p0.id);
+      const p1 = m1.get(p0.id);
+      proj.push(p1
+        ? { id: p0.id, amount: p0.amount, x: lerp(p0.x, p1.x, t), y: lerp(p0.y, p1.y, t) }
+        : p0); // despawning: hold last spot until it drops out next sample
+    }
+    for (const p1 of s1.projectiles) if (!seen.has(p1.id)) proj.push(p1); // just spawned
+    out.projectiles = proj;
+    return out;
+  }
+
+  // Override the local player's held-bomb arm and weapon/magnify aim with the
+  // live mouse, mirroring the host's arm integration so the two converge (they
+  // agree exactly whenever the mouse is still — the host applies the same
+  // clamp + BombArmMoveSpeed cap).
+  function applyLocalPrediction(snap, dtMs) {
+    if (!snap || !myId) return snap;
+    const meIdx = snap.players.findIndex(p => p.id === myId);
+    if (meIdx < 0) return snap;
+    const me = snap.players[meIdx];
+    const you = snap.you;
+    const st = collector.peek();
+    const mouse = st.mx != null ? { x: st.mx, y: st.my } : null;
+    if (!mouse) return snap;
+
+    let outBomb = snap.bomb;
+    let outMe = me;
+
+    const iAmHolder = !!(you && you.isHolder && snap.bomb && !snap.bomb.transferring && snap.phase === "playing");
+
+    if (iAmHolder) {
+      const seat = { x: me.x, y: me.y };
+      let tx = mouse.x - seat.x, ty = mouse.y - seat.y;
+      const len = Math.hypot(tx, ty);
+      const target = len > 0.001
+        ? (r => ({ x: tx / len * r, y: ty / len * r }))(Math.min(len, CONFIG.BombArmReach))
+        : { x: 0, y: 0 };
+      const auth = { x: snap.bomb.x - seat.x, y: snap.bomb.y - seat.y };
+      if (!predOffset) predOffset = auth;
+      // Snap back if we've diverged hard from the host (a correction, a hit
+      // that moved the bomb, or a fresh hold): trust authority over the guess.
+      if (Math.hypot(predOffset.x - auth.x, predOffset.y - auth.y) > CONFIG.BombArmReach) predOffset = auth;
+      const dt = Math.min(dtMs, 100) / 1000;
+      const dx = target.x - predOffset.x, dy = target.y - predOffset.y;
+      const stepLen = Math.hypot(dx, dy);
+      const maxStep = CONFIG.BombArmMoveSpeed * dt;
+      predOffset = (stepLen <= maxStep || stepLen < 0.001)
+        ? target
+        : { x: predOffset.x + dx / stepLen * maxStep, y: predOffset.y + dy / stepLen * maxStep };
+      outBomb = Object.assign({}, snap.bomb, { x: seat.x + predOffset.x, y: seat.y + predOffset.y });
+    } else {
+      predOffset = null; // reset so the next hold starts from authority
+    }
+
+    // Aim: if I've armed a weapon locally, show its pose + sight line pointing
+    // at the live mouse now, rather than waiting for the host to echo my equip
+    // back. Also tracks the mouse for an already-confirmed weapon/magnify.
+    const armedNow = armedSlot != null && you && you.alive && snap.phase === "playing" && !iAmHolder;
+    if (armedNow) {
+      outMe = Object.assign({}, me, { equipped: true, aimX: mouse.x, aimY: mouse.y });
+    } else if (me.equipped || me.revealing) {
+      outMe = Object.assign({}, me, { aimX: mouse.x, aimY: mouse.y });
+    }
+
+    if (outBomb === snap.bomb && outMe === me) return snap;
+    const out = Object.assign({}, snap, { bomb: outBomb });
+    if (outMe !== me) { out.players = snap.players.slice(); out.players[meIdx] = outMe; }
+    return out;
+  }
+
   const dom = {
     coinDisplay: $("coinDisplay"),
     statusLine: $("statusLine"),
@@ -159,9 +300,15 @@
   // ---- Render loop (shared by host and client) ----
 
   function frame() {
+    const nowMs = performance.now();
+    const dtMs = nowMs - lastFrameMs;
+    lastFrameMs = nowMs;
+
     if (screens["screen-game"].classList.contains("active") && latestSnap) {
-      // Drop the armed card if it left the hand (used elsewhere, discarded,
-      // died, or the phase changed) so the UI never shows a stale aim state.
+      // Armed-card cleanup reacts to *authoritative* state (the newest snapshot),
+      // not the interpolated/predicted view: drop the armed card if it left the
+      // hand (used elsewhere, discarded, died, or the phase changed) so the UI
+      // never shows a stale aim state.
       const you = latestSnap.you;
       const reallyHolding = you && you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring);
       if (armedSlot != null && (!you || !you.hand[armedSlot] || reallyHolding || latestSnap.phase !== "playing")) {
@@ -170,8 +317,15 @@
       }
       canvas.style.cursor = armedSlot != null ? "pointer" : "crosshair";
 
-      Render.draw(ctx, latestSnap, myId);
-      Render.updateDom(dom, latestSnap, {
+      // Host draws its own 60 Hz sim raw (no network in the loop). Clients draw
+      // an interpolated past frame with the local player predicted forward.
+      let viewSnap = latestSnap;
+      if (role === "client") {
+        viewSnap = applyLocalPrediction(sampleInterpolated(nowMs) || latestSnap, dtMs);
+      }
+
+      Render.draw(ctx, viewSnap, myId);
+      Render.updateDom(dom, viewSnap, {
         useCard: s => activateCard(s),
         discardCard: s => { if (armedSlot === s) armedSlot = null; collector.pressDiscard(s); },
         armedSlot,
@@ -185,6 +339,8 @@
   function enterGame() {
     Render.resetDomCache();
     dom.eventLog.innerHTML = "";
+    snapBuffer.length = 0; // no stale interpolation carried across matches
+    predOffset = null;
     show("game");
   }
 
@@ -304,7 +460,7 @@
       onReject: reason => { $("joinStatus").textContent = "Rejected: " + reason; },
       onLobby: roster => renderSeats($("clientSeatList"), roster),
       onStart: enterGame,
-      onSnapshot: snap => { latestSnap = snap; },
+      onSnapshot: snap => { latestSnap = snap; pushClientSnap(snap); },
       onClosed: () => {
         alert("Disconnected from host.");
         location.reload();

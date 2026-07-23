@@ -760,7 +760,9 @@ const Sim = (() => {
           ? { remaining: viewer.revealRemaining, bombTime: b.remaining }
           : null,
       } : null,
-      projectiles: sim.projectiles.map(pr => ({ x: pr.x, y: pr.y, amount: pr.amount })),
+      // id is carried so clients can match a projectile across snapshots and
+      // interpolate its position instead of teleporting it 45px per snapshot.
+      projectiles: sim.projectiles.map(pr => ({ id: pr.id, x: pr.x, y: pr.y, amount: pr.amount })),
       events: sim.events.slice(-30),
     };
 
