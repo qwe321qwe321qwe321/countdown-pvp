@@ -62,6 +62,14 @@ const Render = (() => {
       // see — and since both their hands are busy, they can't be the bomb
       // holder at the same time.
       if (p.alive && p.equipped) drawWeaponPose(ctx, p, cx, cy);
+
+      // Everyone can see *that* a player is using a Magnifying Glass, just
+      // never the reading it gives them.
+      if (p.alive && p.revealing) {
+        ctx.font = "18px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("🔍", p.x + C.PlayerBodyRadius + 4, p.y - C.PlayerBodyRadius - 6);
+      }
     }
 
     // Arms: body -> hands -> bomb, only for the current holder, and only

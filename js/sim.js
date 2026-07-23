@@ -635,6 +635,7 @@ const Sim = (() => {
           equipped,                          // wielding a throwable/gun card — visible to everyone
           aimX: equipped ? p.aim.x : null,
           aimY: equipped ? p.aim.y : null,
+          revealing: p.revealRemaining > 0,  // using a Magnifying Glass right now — visible to everyone (not the reading itself)
         };
       }),
       you: viewer ? {
