@@ -90,8 +90,10 @@
     if (!cardId) return;
     if (Cards.TYPES[cardId].kind === "projectile") {
       // Both hands are full holding the bomb — the holder can't wield a
-      // weapon too, so arming does nothing while you're the current holder.
-      if (you.isHolder) return;
+      // weapon too. But once it's been thrown and is in flight, their hands
+      // are free again even though isHolder hasn't flipped yet.
+      const reallyHolding = you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring);
+      if (reallyHolding) return;
       armedSlot = (armedSlot === slot) ? null : slot;
       collector.setEquip(armedSlot);
     } else {
@@ -135,7 +137,8 @@
       // Drop the armed card if it left the hand (used elsewhere, discarded,
       // died, or the phase changed) so the UI never shows a stale aim state.
       const you = latestSnap.you;
-      if (armedSlot != null && (!you || !you.hand[armedSlot] || you.isHolder || latestSnap.phase !== "playing")) {
+      const reallyHolding = you && you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring);
+      if (armedSlot != null && (!you || !you.hand[armedSlot] || reallyHolding || latestSnap.phase !== "playing")) {
         armedSlot = null;
         collector.setEquip(null);
       }

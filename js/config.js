@@ -11,10 +11,10 @@ const CONFIG = {
   ExplosionTransitionDuration: 2.5,       // pause between explosion and next bomb
 
   // ---- Passing ----
-  BaseMinimumHoldTime: 1.0,               // pass lock after receiving the bomb
+  BaseMinimumHoldTime: 0,                 // no forced hold before an uncursed bomb can be passed again
   CurseMinimumHoldTime: 5.0,              // pass lock when receiving a cursed bomb
-  BombPassTransferDuration: 0.5,          // travel time while the bomb is mid-pass between seats
-  PublicTimeRevealDuration: 10.0,         // real seconds, right after gameplay starts, the timer is shown to everyone
+  BombPassTransferDuration: 2.0,          // travel time while the bomb is mid-pass between seats
+  PublicTimeRevealDuration: 5.0,         // real seconds, right after gameplay starts, the timer is shown to everyone
 
   // ---- Speed modifiers (override, never stack) ----
   FastBombMultiplier: 2.0,

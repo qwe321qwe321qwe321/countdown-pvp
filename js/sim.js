@@ -311,8 +311,10 @@ const Sim = (() => {
 
       case "projectile": {
         // A player holding a weapon needs both hands free to aim it, and the
-        // bomb holder's hands are full holding the bomb.
-        if (b.holderId === p.id) return;
+        // bomb holder's hands are full holding the bomb — but once it's
+        // been thrown and is in flight (b.transfer), their hands are free
+        // again even though b.holderId hasn't formally changed yet.
+        if (b.holderId === p.id && !b.transfer) return;
         // Real 2D projectiles (never hitscan), fired from the player's hand
         // position toward their current mouse aim. The card is consumed even
         // if every shot misses. -Time Gun cards fire C.GunBurstCount separate

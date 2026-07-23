@@ -386,8 +386,10 @@ const Render = (() => {
       const kind = Cards.TYPES[cardId].kind;
       if (kind === "shield" && !you.isHolder) return false;
       // Both hands are full holding the bomb — the holder can't wield a
-      // thrown/fired weapon at the same time.
-      if (kind === "projectile" && you.isHolder) return false;
+      // thrown/fired weapon at the same time. Once it's been thrown and is
+      // in flight, their hands are free again.
+      const reallyHolding = you.isHolder && !(snap.bomb && snap.bomb.transferring);
+      if (kind === "projectile" && reallyHolding) return false;
       return true;
     };
   }
