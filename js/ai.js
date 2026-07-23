@@ -1,68 +1,106 @@
-// Simple bot: produces the same input shape a remote client would submit,
-// so the sim treats human and AI identically.
-function getAIInput(sim, p) {
-  const inp = { moveX: 0, moveY: 0, aimX: p.aimX, aimY: p.aimY, shootMinus: false, shootPlus: false, shield: false };
-  if (!p.alive || p.spectator || sim.match.state !== 'playing') return inp;
+"use strict";
 
-  const bomb = sim.bomb;
-  const holding = bomb.holderId === p.id;
-  const enemy = sim.players.find(o => o.id !== p.id && o.alive && !o.spectator);
+// Host-side bots for solo testing. A bot produces exactly the same plain
+// input shape a network client sends ({ mx, my, pass, draw, use }), so the
+// sim treats humans and bots identically and bots get no special authority.
+const AI = (() => {
+  const C = CONFIG;
 
-  if (holding) {
-    // Chase someone to pass the bomb.
-    if (enemy) {
-      const dx = enemy.x - p.x, dy = enemy.y - p.y;
-      const d = Math.hypot(dx, dy) || 1;
-      inp.moveX = dx / d; inp.moveY = dy / d;
+  function createBrain() {
+    return {
+      holdUntil: null,   // when (sim.time) to pass after the lock opens
+      nextActAt: 0,      // next time this bot considers using a card
+      wander: Math.random() * Math.PI * 2,
+    };
+  }
+
+  function findSlot(player, pred) {
+    return player.hand.findIndex(id => pred(Cards.TYPES[id]));
+  }
+
+  function botInput(sim, player, brain) {
+    const inp = { mx: player.aim.x, my: player.aim.y, pass: false, draw: false, use: [] };
+    if (!player.alive) return inp;
+
+    // Draw whenever affordable (lightly throttled by chance per tick).
+    if (player.coins >= C.CardDrawCost && player.hand.length < C.MaxHandSize && Math.random() < 0.01) {
+      inp.draw = true;
     }
 
-    // Arm control: find the most threatening incoming projectile and either
-    // dodge the bomb away from it (minus) or reach out to catch it (plus).
-    let best = null, bestT = Infinity;
+    if (sim.phase !== "playing" || !sim.bomb) return inp;
+
+    const b = sim.bomb;
+    const holding = b.holderId === player.id;
+    const bombPos = Sim.bombWorldPos(sim);
+    const seat = Sim.seatPosition(player.seat, sim.seatCount);
+
+    // Nearest incoming minus-time projectile threatening the bomb.
+    let threat = null, threatDist = Infinity;
     for (const pr of sim.projectiles) {
-      const rx = bomb.x - pr.x, ry = bomb.y - pr.y;
-      const spd = Math.hypot(pr.vx, pr.vy) || 1;
-      const closing = (rx * pr.vx + ry * pr.vy) / spd; // >0 means heading toward the bomb
-      const dist = Math.hypot(rx, ry);
-      if (closing > 0 && dist < 320 && dist / spd < bestT) { best = pr; bestT = dist / spd; }
+      if (pr.amount >= 0) continue;
+      const d = Math.hypot(pr.x - bombPos.x, pr.y - bombPos.y);
+      const toward = (bombPos.x - pr.x) * pr.vx + (bombPos.y - pr.y) * pr.vy > 0;
+      if (toward && d < 260 && d < threatDist) { threat = pr; threatDist = d; }
     }
-    if (best) {
-      const spd = Math.hypot(best.vx, best.vy) || 1;
-      const dirX = best.vx / spd, dirY = best.vy / spd;
-      if (best.type === 'plus') {
-        // Reach the bomb toward the repair shot's path.
-        inp.aimX = best.x + dirX * 40;
-        inp.aimY = best.y + dirY * 40;
+
+    if (holding) {
+      // Arm control: dodge incoming minus shots sideways, otherwise drift the
+      // bomb gently around the seat.
+      if (threat) {
+        const vlen = Math.hypot(threat.vx, threat.vy) || 1;
+        const px = -threat.vy / vlen, py = threat.vx / vlen; // perpendicular
+        const side = (bombPos.x - threat.x) * px + (bombPos.y - threat.y) * py >= 0 ? 1 : -1;
+        inp.mx = seat.x + px * side * C.BombArmReach;
+        inp.my = seat.y + py * side * C.BombArmReach;
       } else {
-        // Slide the bomb perpendicular to the shot's path, away from it.
-        const perpX = -dirY, perpY = dirX;
-        const side = (bomb.x - best.x) * perpX + (bomb.y - best.y) * perpY >= 0 ? 1 : -1;
-        inp.aimX = p.x + perpX * side * CONFIG.BOMB_ARM_REACH;
-        inp.aimY = p.y + perpY * side * CONFIG.BOMB_ARM_REACH;
-        // Panic shield if it's about to connect.
-        if (bestT < 0.25 && p.shieldCd <= 0) inp.shield = true;
+        brain.wander += (Math.random() - 0.5) * 0.2;
+        const r = C.BombArmReach * 0.6;
+        inp.mx = seat.x + Math.cos(brain.wander) * r;
+        inp.my = seat.y + Math.sin(brain.wander) * r;
+      }
+
+      // Pass after a short random extra hold once the lock opens.
+      if (player.passLock <= 0) {
+        if (brain.holdUntil == null) brain.holdUntil = sim.time + 0.3 + Math.random() * 2.2;
+        if (sim.time >= brain.holdUntil) { inp.pass = true; brain.holdUntil = null; }
+      }
+
+      // Defensive cards while holding.
+      const shieldSlot = findSlot(player, d => d.kind === "shield");
+      if (threat && shieldSlot >= 0 && b.shieldRemaining <= 0) {
+        inp.use.push(shieldSlot);
+      } else if (sim.time >= brain.nextActAt) {
+        const slow = findSlot(player, d => d.kind === "speed" && d.mult < 1);
+        const repair = findSlot(player, d => d.kind === "projectile" && d.amount > 0);
+        if (slow >= 0 && b.speedMult >= 1) {
+          inp.use.push(slow);
+        } else if (repair >= 0 && b.shieldRemaining <= 0) {
+          // Throw the repair kit at our own bomb (short, easy shot).
+          inp.mx = bombPos.x; inp.my = bombPos.y;
+          inp.use.push(repair);
+        }
+        brain.nextActAt = sim.time + 1.5 + Math.random() * 3;
       }
     } else {
-      // Idle: keep the bomb held out toward the enemy (ready to pass).
-      inp.aimX = enemy ? enemy.x : p.x;
-      inp.aimY = enemy ? enemy.y : p.y - 40;
+      brain.holdUntil = null;
+      // Keep aiming at the bomb; occasionally play an offensive card.
+      inp.mx = bombPos.x;
+      inp.my = bombPos.y;
+      if (sim.time >= brain.nextActAt) {
+        const gun = findSlot(player, d => d.kind === "projectile" && d.amount < 0);
+        const fast = findSlot(player, d => d.kind === "speed" && d.mult > 1);
+        const curse = findSlot(player, d => d.kind === "curse");
+        const magnify = findSlot(player, d => d.kind === "magnify");
+        if (gun >= 0 && b.shieldRemaining <= 0) inp.use.push(gun);
+        else if (fast >= 0 && b.speedMult <= 1) inp.use.push(fast);
+        else if (curse >= 0 && !b.curseActive) inp.use.push(curse);
+        else if (magnify >= 0 && Math.random() < 0.5) inp.use.push(magnify);
+        brain.nextActAt = sim.time + 1.5 + Math.random() * 3;
+      }
     }
-  } else {
-    // Keep midrange distance from the holder and shoot at the bomb.
-    const holder = sim.players.find(o => o.id === bomb.holderId);
-    const dx = holder.x - p.x, dy = holder.y - p.y;
-    const d = Math.hypot(dx, dy) || 1;
-    const want = 260;
-    const push = d > want + 40 ? 1 : (d < want - 40 ? -1 : 0);
-    // Orbit + range-keeping.
-    inp.moveX = (dx / d) * push + (-dy / d) * 0.6;
-    inp.moveY = (dy / d) * push + (dx / d) * 0.6;
 
-    // Lead the shot slightly with some spread.
-    const spread = 24;
-    inp.aimX = bomb.x + (Math.random() - 0.5) * spread;
-    inp.aimY = bomb.y + (Math.random() - 0.5) * spread;
-    if (p.shootCd <= 0 && Math.random() < 0.6) inp.shootMinus = true;
+    return inp;
   }
-  return inp;
-}
+
+  return { createBrain, botInput };
+})();
