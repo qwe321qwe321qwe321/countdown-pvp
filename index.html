@@ -8,6 +8,7 @@
   #app { display: flex; flex-direction: column; align-items: center; padding: 14px; gap: 10px; }
   .screen { display: none; width: 100%; max-width: 960px; }
   .screen.active { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  #screen-game.screen { max-width: 1440px; }
   .panel { background: #1e222a; border: 1px solid #3a4150; border-radius: 8px; padding: 16px 20px; width: 100%; box-sizing: border-box; }
   h1 { font-size: 20px; margin: 4px 0; }
   h2 { font-size: 15px; margin: 0 0 8px; color: #c6cdd6; }
@@ -29,14 +30,15 @@
   #coinDisplay { font-size: 26px; font-weight: bold; color: #ffd54c; text-shadow: 0 0 8px rgba(255,213,76,0.35); }
   #coinDisplay .coin-icon { margin-right: 4px; }
   #statusLine { font-size: 13px; color: #9aa4b2; }
-  #gameBar { display: flex; gap: 16px; width: 960px; max-width: 100%; align-items: flex-start; }
+  #gameBar { display: flex; gap: 16px; width: 100%; max-width: 100%; align-items: flex-start; justify-content: center; }
   #hand { display: flex; flex-direction: column; gap: 6px; }
   #hand .cardRow { display: flex; gap: 4px; align-items: stretch; }
   #hand .cardRow button.useBtn { flex: 1; min-width: 150px; text-align: left; }
   #hand .cardRow button.useBtn.armed { background: #7a3f1f; border-color: #ff9d5c; color: #ffe0c2; }
   #hand .cardRow button.discardBtn { padding: 8px 10px; }
   #aimHint { display: none; font-size: 12px; color: #ff9d5c; margin-top: 6px; }
-  #sideCol { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  #sideCol { flex: 0 0 240px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  #handCol { flex: 0 0 240px; min-width: 0; }
   #eventLog { font-size: 12px; background: #14161a; border-radius: 6px; padding: 8px; height: 130px; overflow-y: auto; }
   #debugPanel { display: none; font-size: 11px; font-family: monospace; white-space: pre; background: #0c0d10; border: 1px solid #4d566a; border-radius: 6px; padding: 8px; max-height: 280px; overflow: auto; }
   #matchOverBar { display: none; gap: 10px; align-items: center; margin-top: 8px; }
@@ -97,7 +99,6 @@
       <div id="coinDisplay"></div>
       <div id="statusLine"></div>
     </div>
-    <canvas id="game" width="960" height="640"></canvas>
     <div id="gameBar">
       <div id="sideCol">
         <div class="panel" style="padding:8px">
@@ -106,7 +107,8 @@
         </div>
         <div id="debugPanel"></div>
       </div>
-      <div class="panel" style="width:auto">
+      <canvas id="game" width="960" height="640"></canvas>
+      <div class="panel" id="handCol">
         <h2>Hand (1-5 or click)</h2>
         <div id="hand"></div>
         <div id="aimHint">🎯 AIMING — click the table to fire, right-click/Esc to cancel</div>
