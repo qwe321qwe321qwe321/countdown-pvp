@@ -54,6 +54,15 @@ const Sim = (() => {
 
   // ---- Match / bomb lifecycle ----------------------------------------------
 
+  // Fixed-size hand: null marks an empty slot. Using/discarding a card clears
+  // its slot in place rather than shifting later cards down, so a card's
+  // position never moves just because an earlier one was used.
+  function freshHand() {
+    const h = new Array(C.MaxHandSize).fill(null);
+    C.StartingHand.forEach((id, i) => { h[i] = id; });
+    return h;
+  }
+
   function createMatch(roster, bombTimePool) {
     const sim = {
       seatCount: roster.length,
@@ -66,7 +75,7 @@ const Sim = (() => {
         disconnected: false,
         alive: true,
         coins: C.StartingCoins,
-        hand: C.StartingHand.slice(),  // card type ids; every match begins with the starting hand
+        hand: freshHand(),  // fixed-size; card type ids or null for empty slots
         passLock: 0,
         passiveAcc: 0,
         holderAcc: 0,
@@ -140,7 +149,7 @@ const Sim = (() => {
     for (const p of sim.players) {
       p.alive = !p.disconnected;
       p.coins = C.StartingCoins;
-      p.hand = C.StartingHand.slice();
+      p.hand = freshHand();
       p.passLock = 0;
       p.passiveAcc = 0;
       p.holderAcc = 0;
@@ -214,7 +223,7 @@ const Sim = (() => {
   function eliminate(sim, player) {
     player.alive = false;
     player.coins = 0;
-    player.hand = [];
+    player.hand = new Array(C.MaxHandSize).fill(null);
     player.revealRemaining = 0;
     player.gunPending = null;
     player.equippedSlot = null;
@@ -287,19 +296,21 @@ const Sim = (() => {
   function tryDraw(sim, p) {
     if (!p.alive) return;
     if (p.coins < C.CardDrawCost) return;
-    if (p.hand.length >= C.MaxHandSize) return; // hand full: no draw, no charge
+    const slot = p.hand.indexOf(null);
+    if (slot === -1) return; // hand full: no draw, no charge
     p.coins -= C.CardDrawCost;
-    p.hand.push(Cards.rollCard());               // host decides which card
+    p.hand[slot] = Cards.rollCard();               // host decides which card
     addEvent(sim, `${p.name} drew a card`);
   }
 
   // Drop a card from the hand without triggering its effect (e.g. to make
-  // room for a better draw). No coin refund.
+  // room for a better draw). No coin refund. Clears the slot in place so
+  // later cards don't shift down.
   function discardCard(sim, p, slot) {
     const cardId = p.hand[slot];
     if (!cardId) return;
     if (p.gunPending && p.gunPending.slot === slot) p.gunPending = null;
-    p.hand.splice(slot, 1);
+    p.hand[slot] = null;
     addEvent(sim, `${p.name} discarded ${Cards.TYPES[cardId].name}`);
   }
 
@@ -308,7 +319,7 @@ const Sim = (() => {
     if (!cardId) return;
     const def = Cards.TYPES[cardId];
     const b = sim.bomb;
-    const consume = () => p.hand.splice(slot, 1);
+    const consume = () => { p.hand[slot] = null; };
 
     switch (def.kind) {
       case "magnify":
@@ -733,7 +744,7 @@ const Sim = (() => {
         name: p.name,
         state: p.disconnected ? "disconnected" : (p.alive ? "alive" : "spectator"),
         coins: p.coins,
-        hand: p.hand.map(id => Cards.TYPES[id].name),
+        hand: p.hand.map(id => id ? Cards.TYPES[id].name : "-"),
         passLock: p.passLock,
       })),
     };

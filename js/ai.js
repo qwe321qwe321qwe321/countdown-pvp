@@ -15,7 +15,7 @@ const AI = (() => {
   }
 
   function findSlot(player, pred) {
-    return player.hand.findIndex(id => pred(Cards.TYPES[id]));
+    return player.hand.findIndex(id => id != null && pred(Cards.TYPES[id]));
   }
 
   function botInput(sim, player, brain) {
@@ -23,7 +23,7 @@ const AI = (() => {
     if (!player.alive) return inp;
 
     // Draw whenever affordable (lightly throttled by chance per tick).
-    if (player.coins >= C.CardDrawCost && player.hand.length < C.MaxHandSize && Math.random() < 0.01) {
+    if (player.coins >= C.CardDrawCost && player.hand.includes(null) && Math.random() < 0.01) {
       inp.draw = true;
     }
 

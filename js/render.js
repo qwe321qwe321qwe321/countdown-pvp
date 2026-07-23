@@ -235,15 +235,19 @@ const Render = (() => {
     if (snap.you && snap.you.reveal) {
       ctx.font = "bold 17px monospace";
       ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
       ctx.fillStyle = "#ffe27a";
-      ctx.fillText(snap.you.reveal.bombTime.toFixed(1) + "s", b.x, b.y + C.BombRadius + 22);
+      ctx.fillText(snap.you.reveal.bombTime.toFixed(1) + "s", b.x, b.y);
+      ctx.textBaseline = "alphabetic";
     } else if (b.publicRemaining != null) {
       // Opening public reveal window: same look as the Magnifying Glass,
       // but visible to everyone and follows the bomb around.
       ctx.font = "bold 17px monospace";
       ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
       ctx.fillStyle = "#ffe27a";
-      ctx.fillText(b.publicRemaining.toFixed(1) + "s", b.x, b.y + C.BombRadius + 22);
+      ctx.fillText(b.publicRemaining.toFixed(1) + "s", b.x, b.y);
+      ctx.textBaseline = "alphabetic";
     }
   }
 
@@ -355,7 +359,7 @@ const Render = (() => {
         }
       }
 
-      dom.btnDraw.disabled = !you.alive || you.coins < C.CardDrawCost || you.hand.length >= C.MaxHandSize;
+      dom.btnDraw.disabled = !you.alive || you.coins < C.CardDrawCost || !you.hand.includes(null);
       dom.btnDraw.textContent = `Draw Card (R) — ${C.CardDrawCost}c`;
 
       if (you.isHolder && snap.phase === "playing") {
