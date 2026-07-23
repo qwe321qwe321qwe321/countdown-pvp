@@ -85,7 +85,19 @@ const Sim = (() => {
     return h;
   }
 
+  // Fisher-Yates shuffle of seat indices, so entry order never determines
+  // table position.
+  function shuffledSeats(n) {
+    const seats = Array.from({ length: n }, (_, i) => i);
+    for (let i = seats.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [seats[i], seats[j]] = [seats[j], seats[i]];
+    }
+    return seats;
+  }
+
   function createMatch(roster, bombTimePool) {
+    const seats = shuffledSeats(roster.length);
     const sim = {
       seatCount: roster.length,
       bombTimePool: bombTimePool.slice(),
@@ -93,7 +105,7 @@ const Sim = (() => {
         id: r.id,
         name: r.name,
         isBot: !!r.isBot,
-        seat: i,
+        seat: seats[i],
         disconnected: false,
         alive: true,
         coins: C.StartingCoins,
