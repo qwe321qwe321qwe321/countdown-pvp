@@ -13,7 +13,7 @@ const CONFIG = {
   // ---- Passing ----
   BaseMinimumHoldTime: 0,                 // no forced hold before an uncursed bomb can be passed again
   CurseMinimumHoldTime: 5.0,              // pass lock when receiving a cursed bomb
-  BombPassSpeed: 500,                     // world units/sec the bomb travels while mid-pass between seats
+  BombPassSpeed: 300,                     // world units/sec the bomb travels while mid-pass between seats
   PublicTimeRevealDuration: 5.0,         // real seconds, right after gameplay starts, the timer is shown to everyone
 
   // ---- Speed modifiers (override, never stack) ----
