@@ -13,7 +13,7 @@ const CONFIG = {
   // ---- Passing ----
   BaseMinimumHoldTime: 0,                 // no forced hold before an uncursed bomb can be passed again
   CurseMinimumHoldTime: 5.0,              // pass lock when receiving a cursed bomb
-  BombPassTransferDuration: 2.0,          // travel time while the bomb is mid-pass between seats
+  BombPassTransferDuration: 1.0,          // travel time while the bomb is mid-pass between seats
   PublicTimeRevealDuration: 5.0,         // real seconds, right after gameplay starts, the timer is shown to everyone
 
   // ---- Speed modifiers (override, never stack) ----
@@ -61,7 +61,7 @@ const CONFIG = {
   BombArmReach: 80,                       // max arm-controlled bomb offset from the seat
 
   // ---- Projectiles ----
-  ProjectileSpeed: 380,
+  ProjectileSpeed: 900,                   // world units/sec — tune this if shots feel too slow/fast
   ProjectileRadius: 5,
   MuzzleOffset: 32,                       // spawn distance from body center toward aim
   GunBurstCount: 3,                       // -Time Gun cards can be fired this many separate times per use
