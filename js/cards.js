@@ -5,16 +5,16 @@
 // kind: 'magnify' | 'projectile' | 'speed' | 'shield' | 'curse'
 const Cards = (() => {
   const TYPES = {
-    magnify:  { name: "Magnifying Glass", kind: "magnify" },
-    gun1:     { name: "-1s Gun",          kind: "projectile", amount: -1 },
-    gun3:     { name: "-3s Gun",          kind: "projectile", amount: -3 },
-    gun5:     { name: "-5s Gun",          kind: "projectile", amount: -5 },
-    repair5:  { name: "+5s Repair Kit",   kind: "projectile", amount: +5 },
-    repair10: { name: "+10s Repair Kit",  kind: "projectile", amount: +10 },
-    speedup:  { name: "Speed Up Stopwatch",  kind: "speed", mult: CONFIG.FastBombMultiplier, duration: CONFIG.FastBombDuration },
-    slowdown: { name: "Slow Down Stopwatch", kind: "speed", mult: CONFIG.SlowBombMultiplier, duration: CONFIG.SlowBombDuration },
-    shield:   { name: "Shield", kind: "shield" },
-    curse:    { name: "Curse",  kind: "curse" },
+    magnify:  { name: "Magnifying Glass", emoji: "🔍", kind: "magnify" },
+    gun1:     { name: "-1s Gun",          emoji: "🔫", kind: "projectile", amount: -1 },
+    gun3:     { name: "-3s Gun",          emoji: "🔥", kind: "projectile", amount: -3 },
+    gun5:     { name: "-5s Gun",          emoji: "💣", kind: "projectile", amount: -5 },
+    repair5:  { name: "+5s Repair Kit",   emoji: "🧰", kind: "projectile", amount: +5 },
+    repair10: { name: "+10s Repair Kit",  emoji: "🛠️", kind: "projectile", amount: +10 },
+    speedup:  { name: "Speed Up Stopwatch",  emoji: "⏩", kind: "speed", mult: CONFIG.FastBombMultiplier, duration: CONFIG.FastBombDuration },
+    slowdown: { name: "Slow Down Stopwatch", emoji: "⏪", kind: "speed", mult: CONFIG.SlowBombMultiplier, duration: CONFIG.SlowBombDuration },
+    shield:   { name: "Shield", emoji: "🛡️", kind: "shield" },
+    curse:    { name: "Curse",  emoji: "☠️", kind: "curse" },
   };
 
   // Weighted random draw over CONFIG.CardDropWeights. Host-only.

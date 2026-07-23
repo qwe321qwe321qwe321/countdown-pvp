@@ -332,12 +332,13 @@ const Render = (() => {
           const useBtn = document.createElement("button");
           useBtn.className = "useBtn";
           if (cardId) {
-            useBtn.textContent = `${i + 1}. ${Cards.TYPES[cardId].name}`;
+            const def = Cards.TYPES[cardId];
+            useBtn.innerHTML = `<span class="cardEmoji">${def.emoji}</span><span class="cardLabel">${i + 1}. ${def.name}</span>`;
             useBtn.disabled = !usable(i);
             if (hooks.armedSlot === i) useBtn.classList.add("armed");
             useBtn.onclick = () => hooks.useCard(i);
           } else {
-            useBtn.textContent = `${i + 1}. —`;
+            useBtn.innerHTML = `<span class="cardEmoji">·</span><span class="cardLabel">${i + 1}. —</span>`;
             useBtn.disabled = true;
           }
           row.appendChild(useBtn);

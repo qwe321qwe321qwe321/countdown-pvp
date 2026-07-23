@@ -97,6 +97,14 @@ const Sim = (() => {
   function spawnBomb(sim) {
     const pool = sim.bombTimePool;
     const t = pool[Math.floor(Math.random() * pool.length)];
+    // Pick the initial holder now and start it traveling there right away, so
+    // the bomb visibly drifts in from the center during the reveal/countdown
+    // display instead of snapping onto a player the instant "playing" starts.
+    const alive = sim.players.filter(p => p.alive);
+    const target = alive.length ? alive[Math.floor(Math.random() * alive.length)] : null;
+    const fromPos = { x: CENTER.x, y: CENTER.y };
+    const toPos = target ? seatPosition(target.seat, sim.seatCount) : fromPos;
+    const travelWindow = Math.max(0.5, C.InitialTimeRevealDuration + C.CountdownSeconds - 0.3);
     sim.bomb = {
       initialTime: t,
       remaining: t,
@@ -106,7 +114,9 @@ const Sim = (() => {
       speedRemaining: 0,
       shieldRemaining: 0,
       curseActive: false,
-      transfer: null,
+      transfer: target
+        ? { fromId: null, toId: target.id, elapsed: 0, duration: travelWindow, fromPos, toPos }
+        : null,
     };
     sim.projectiles = [];
     sim.explosionAt = null;
@@ -164,6 +174,28 @@ const Sim = (() => {
       addEvent(sim, `CURSE! ${player.name} must hold for ${C.CurseMinimumHoldTime}s`);
     } else {
       player.passLock = C.BaseMinimumHoldTime;
+    }
+  }
+
+  // Advance an in-flight bomb transfer (initial travel-in or an in-round
+  // pass) and hand off ownership once it arrives. Safe to call in any phase;
+  // during reveal/countdown this is what makes the bomb visibly drift onto
+  // its initial holder instead of appearing there instantly.
+  function advanceBombTransfer(sim, dt) {
+    const b = sim.bomb;
+    if (!b || !b.transfer) return;
+    b.transfer.elapsed += dt;
+    if (b.transfer.elapsed >= b.transfer.duration) {
+      const initial = !b.transfer.fromId;
+      const receiver = getPlayer(sim, b.transfer.toId);
+      const sender = b.transfer.fromId ? getPlayer(sim, b.transfer.fromId) : null;
+      b.transfer = null;
+      if (receiver && receiver.alive) {
+        giveBomb(sim, receiver);
+        addEvent(sim, initial ? `${receiver.name} starts with the bomb!` : `${receiver.name} received the bomb`);
+      } else if (sender && sender.alive) {
+        giveBomb(sim, sender); // receiver vanished mid-pass: bomb stays home
+      }
     }
   }
 
@@ -428,6 +460,7 @@ const Sim = (() => {
       case "reveal":
         sim.phaseTimer -= dt;
         allowDraws(sim, inputs);
+        advanceBombTransfer(sim, dt);
         if (sim.phaseTimer <= 0) {
           sim.phase = "countdown";
           sim.phaseTimer = C.CountdownSeconds;
@@ -437,14 +470,22 @@ const Sim = (() => {
       case "countdown":
         sim.phaseTimer -= dt;
         allowDraws(sim, inputs);
+        advanceBombTransfer(sim, dt);
         if (sim.phaseTimer <= 0) {
-          // Countdown over: timer goes hidden, a random alive player becomes
-          // the initial holder, gameplay starts.
+          // Countdown over: timer goes hidden, gameplay starts. The initial
+          // holder should already have the bomb from its travel-in transfer;
+          // this is just a safety net in case it hasn't landed yet.
           sim.phase = "playing";
-          const alive = sim.players.filter(p => p.alive);
-          const first = alive[Math.floor(Math.random() * alive.length)];
-          giveBomb(sim, first);
-          addEvent(sim, `${first.name} starts with the bomb!`);
+          if (!sim.bomb.holderId) {
+            const targetId = sim.bomb.transfer ? sim.bomb.transfer.toId : null;
+            const alive = sim.players.filter(p => p.alive);
+            const first = getPlayer(sim, targetId) || alive[Math.floor(Math.random() * alive.length)];
+            sim.bomb.transfer = null;
+            if (first) {
+              giveBomb(sim, first);
+              addEvent(sim, `${first.name} starts with the bomb!`);
+            }
+          }
         }
         break;
 
@@ -496,20 +537,7 @@ const Sim = (() => {
     // Advance an in-flight pass. The bomb keeps counting down while it
     // travels, so explode() below still has the right transfer state if it
     // reaches 0 mid-pass.
-    if (b.transfer) {
-      b.transfer.elapsed += dt;
-      if (b.transfer.elapsed >= b.transfer.duration) {
-        const receiver = getPlayer(sim, b.transfer.toId);
-        const sender = getPlayer(sim, b.transfer.fromId);
-        b.transfer = null;
-        if (receiver && receiver.alive) {
-          giveBomb(sim, receiver);
-          addEvent(sim, `${receiver.name} received the bomb`);
-        } else if (sender && sender.alive) {
-          giveBomb(sim, sender); // receiver vanished mid-pass: bomb stays home
-        }
-      }
-    }
+    advanceBombTransfer(sim, dt);
 
     const holder = getPlayer(sim, b.holderId);
 

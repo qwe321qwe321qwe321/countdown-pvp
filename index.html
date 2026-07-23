@@ -32,14 +32,22 @@
   #coinDisplay .coin-icon { margin-right: 4px; }
   #statusLine { font-size: 13px; color: #9aa4b2; }
   #gameBar { display: flex; gap: 16px; width: 100%; max-width: 100%; align-items: flex-start; justify-content: center; }
-  #hand { display: flex; flex-direction: column; gap: 6px; }
-  #hand .cardRow { display: flex; gap: 4px; align-items: stretch; }
-  #hand .cardRow button.useBtn { flex: 1; min-width: 150px; text-align: left; }
+  #centerCol { display: flex; flex-direction: column; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+  #handBar { width: 100%; box-sizing: border-box; }
+  #hand { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  #hand .cardRow { position: relative; width: 104px; }
+  #hand .cardRow button.useBtn {
+    width: 100%; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 10px 6px 8px; text-align: center; font-size: 11px; line-height: 1.25;
+  }
+  #hand .cardRow button.useBtn .cardEmoji { font-size: 24px; line-height: 1; }
   #hand .cardRow button.useBtn.armed { background: #7a3f1f; border-color: #ff9d5c; color: #ffe0c2; }
-  #hand .cardRow button.discardBtn { padding: 8px 10px; }
-  #aimHint { display: none; font-size: 12px; color: #ff9d5c; margin-top: 6px; }
-  #sideCol { flex: 0 0 240px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-  #handCol { flex: 0 0 240px; min-width: 0; }
+  #hand .cardRow button.discardBtn {
+    position: absolute; top: -8px; right: -8px; padding: 2px 6px; font-size: 10px;
+    border-radius: 999px; line-height: 1.4;
+  }
+  #aimHint { display: none; font-size: 12px; color: #ff9d5c; margin-top: 2px; text-align: center; }
+  #sideCol { flex: 0 0 220px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   #eventLog { font-size: 12px; background: #14161a; border-radius: 6px; padding: 8px; height: 130px; overflow-y: auto; }
   #debugPanel { display: none; font-size: 11px; font-family: monospace; white-space: pre; background: #0c0d10; border: 1px solid #4d566a; border-radius: 6px; padding: 8px; max-height: 280px; overflow: auto; }
   #matchOverBar { display: none; gap: 10px; align-items: center; margin-top: 8px; }
@@ -113,21 +121,21 @@
         </div>
         <div id="debugPanel"></div>
       </div>
-      <canvas id="game" width="960" height="640"></canvas>
-      <div class="panel" id="handCol">
-        <h2>Hand (1-5 or click)</h2>
-        <div id="hand"></div>
-        <div id="aimHint">🎯 AIMING — click the table to fire, right-click/Esc to cancel</div>
-        <div class="row" style="margin-top:8px">
-          <button id="btnDraw">Draw Card (R)</button>
-          <button id="btnPass">Pass Bomb (Space)</button>
-        </div>
-        <div class="row" style="margin-top:8px">
-          <label style="font-size:12px"><input type="checkbox" id="chkDebug"> Debug UI (dev only)</label>
-        </div>
-        <div class="row" id="matchOverBar">
-          <span id="matchOverText"></span>
-          <button class="primary" id="btnRematch">Rematch</button>
+      <div id="centerCol">
+        <canvas id="game" width="960" height="640"></canvas>
+        <div class="panel" id="handBar">
+          <h2 style="text-align:center">Hand (1-5 or click)</h2>
+          <div id="hand"></div>
+          <div id="aimHint">🎯 AIMING — click the table to fire, right-click/Esc to cancel</div>
+          <div class="row" style="margin-top:8px; justify-content:center">
+            <button id="btnDraw">Draw Card (R)</button>
+            <button id="btnPass">Pass Bomb (Space)</button>
+            <label style="font-size:12px"><input type="checkbox" id="chkDebug"> Debug UI (dev only)</label>
+          </div>
+          <div class="row" id="matchOverBar" style="justify-content:center">
+            <span id="matchOverText"></span>
+            <button class="primary" id="btnRematch">Rematch</button>
+          </div>
         </div>
       </div>
     </div>
