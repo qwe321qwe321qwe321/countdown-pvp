@@ -66,7 +66,7 @@ const Sim = (() => {
         disconnected: false,
         alive: true,
         coins: C.StartingCoins,
-        hand: [],               // card type ids
+        hand: C.StartingHand.slice(),  // card type ids; every match begins with the starting hand
         passLock: 0,
         passiveAcc: 0,
         holderAcc: 0,
@@ -130,7 +130,7 @@ const Sim = (() => {
     for (const p of sim.players) {
       p.alive = !p.disconnected;
       p.coins = C.StartingCoins;
-      p.hand = [];
+      p.hand = C.StartingHand.slice();
       p.passLock = 0;
       p.passiveAcc = 0;
       p.holderAcc = 0;

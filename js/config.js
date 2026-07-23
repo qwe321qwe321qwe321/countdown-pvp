@@ -37,6 +37,7 @@ const CONFIG = {
   // ---- Cards ----
   CardDrawCost: 5,
   MaxHandSize: 5,
+  StartingHand: ["magnify", "gun5"],      // every player begins the match with these, for free
   CardDropWeights: {
     magnify: 10,
     gun1: 0,
