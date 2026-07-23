@@ -63,9 +63,10 @@ const Render = (() => {
       // holder at the same time.
       if (p.alive && p.equipped) drawWeaponPose(ctx, p, cx, cy);
 
-      // Everyone can see *that* a player is using a Magnifying Glass, just
-      // never the reading it gives them.
+      // Everyone can see *that* a player is using a Magnifying Glass, and
+      // where its box-cast is pointed — just never the reading it gives them.
       if (p.alive && p.revealing) {
+        drawMagnifyCast(ctx, p, snap.bomb);
         ctx.font = "18px sans-serif";
         ctx.textAlign = "center";
         ctx.fillText("🔍", p.x + C.PlayerBodyRadius + 4, p.y - C.PlayerBodyRadius - 6);
@@ -193,6 +194,49 @@ const Render = (() => {
     ctx.beginPath();
     ctx.moveTo(hx, hy);
     ctx.lineTo(hx + dx * C.AimLineLength, hy + dy * C.AimLineLength);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Magnifying Glass box-cast: a long thin rectangle from the player out
+  // along their aim, brighter when it's actually covering the bomb right
+  // now. Purely cosmetic feedback — the host alone decides whether the
+  // owner's private reading is actually included in their own snapshot.
+  function drawMagnifyCast(ctx, p, bomb) {
+    let dx, dy;
+    if (p.aimX != null) { dx = p.aimX - p.x; dy = p.aimY - p.y; }
+    else { dx = 0; dy = -1; }
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    const px = -dy, py = dx; // perpendicular
+    const half = C.MagnifyCastWidth / 2;
+    const length = C.MagnifyCastLength;
+
+    let covering = false;
+    if (bomb) {
+      const fx = bomb.x - p.x, fy = bomb.y - p.y;
+      const forward = fx * dx + fy * dy;
+      const side = fx * px + fy * py;
+      covering = forward >= -C.BombRadius && forward <= length + C.BombRadius &&
+        Math.abs(side) <= half + C.BombRadius;
+    }
+
+    const x0 = p.x + px * half, y0 = p.y + py * half;
+    const x1 = p.x - px * half, y1 = p.y - py * half;
+    const x2 = x1 + dx * length, y2 = y1 + dy * length;
+    const x3 = x0 + dx * length, y3 = y0 + dy * length;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.lineTo(x3, y3);
+    ctx.closePath();
+    ctx.fillStyle = covering ? "rgba(255,226,122,0.22)" : "rgba(255,226,122,0.08)";
+    ctx.fill();
+    ctx.strokeStyle = covering ? "rgba(255,226,122,0.85)" : "rgba(255,226,122,0.3)";
+    ctx.lineWidth = 1.5;
     ctx.stroke();
     ctx.restore();
   }

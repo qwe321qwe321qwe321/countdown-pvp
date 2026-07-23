@@ -23,6 +23,28 @@ const Sim = (() => {
 
   function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 
+  // Box-cast used by the Magnifying Glass: a long, thin rectangle from the
+  // player's seat out along their current aim direction. True only while the
+  // bomb's world position actually falls inside that rectangle (expanded by
+  // the bomb's own radius, so it counts as covered the moment the box
+  // touches the bomb collider, not just its center).
+  function magnifyCovers(sim, p) {
+    const b = sim.bomb;
+    if (!b) return false;
+    const seat = seatPosition(p.seat, sim.seatCount);
+    let dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001) return false;
+    dx /= len; dy /= len;
+    const px = -dy, py = dx; // perpendicular axis
+    const bombPos = bombWorldPos(sim);
+    const fx = bombPos.x - seat.x, fy = bombPos.y - seat.y;
+    const forward = fx * dx + fy * dy;
+    const side = fx * px + fy * py;
+    return forward >= -C.BombRadius && forward <= C.MagnifyCastLength + C.BombRadius &&
+      Math.abs(side) <= C.MagnifyCastWidth / 2 + C.BombRadius;
+  }
+
   function getPlayer(sim, id) { return sim.players.find(p => p.id === id) || null; }
 
   // Bomb world position = holder seat + arm-controlled offset. Before a holder
@@ -323,7 +345,10 @@ const Sim = (() => {
 
     switch (def.kind) {
       case "magnify":
-        // Private reveal: only this player's snapshot carries the exact time.
+        // Opens an aiming window: for RevealDuration seconds the player must
+        // keep their box-cast (see magnifyCovers) over the bomb to actually
+        // see the number, computed fresh every tick in buildSnapshot. Only
+        // this player's snapshot can ever carry the exact time.
         p.revealRemaining = C.RevealDuration;
         consume();
         addEvent(sim, `${p.name} used a Magnifying Glass`);
@@ -672,12 +697,16 @@ const Sim = (() => {
       players: sim.players.map(p => {
         const seat = seatPosition(p.seat, sim.seatCount);
         const equipped = p.equippedSlot != null;
+        const revealing = p.revealRemaining > 0;
         return {
           id: p.id, name: p.name, seat: p.seat, x: seat.x, y: seat.y, alive: p.alive,
           equipped,                          // wielding a throwable/gun card — visible to everyone
-          aimX: equipped ? p.aim.x : null,
-          aimY: equipped ? p.aim.y : null,
-          revealing: p.revealRemaining > 0,  // using a Magnifying Glass right now — visible to everyone (not the reading itself)
+          // Aim direction is public whenever a weapon or the magnifying glass
+          // box-cast is out — everyone can see *where* it's pointed, never
+          // the private reading it gives its owner.
+          aimX: (equipped || revealing) ? p.aim.x : null,
+          aimY: (equipped || revealing) ? p.aim.y : null,
+          revealing,                         // using a Magnifying Glass right now — visible to everyone (not the reading itself)
           // Currently inside the holder-bonus income window — visible to
           // everyone so the extra coin trickle can be shown as a particle cue.
           earningBonus: !!(b && b.holderId === p.id && p.holdElapsed < C.BombHolderCoinDuration),
@@ -697,9 +726,10 @@ const Sim = (() => {
         canPass: !!(b && !b.transfer && b.holderId === viewerId && viewer.passLock <= 0 && sim.phase === "playing"),
         // Spectators (eliminated, waiting out the match) always see the exact
         // bomb time — they can no longer affect gameplay, so there's nothing
-        // left to hide from them. Living players still need a Magnifying
-        // Glass for this.
-        reveal: (b && sim.phase === "playing" && (!viewer.alive || viewer.revealRemaining > 0))
+        // left to hide from them. Living players need an active Magnifying
+        // Glass window *and* their box-cast actually over the bomb this tick.
+        reveal: (b && sim.phase === "playing" &&
+            (!viewer.alive || (viewer.revealRemaining > 0 && magnifyCovers(sim, viewer))))
           ? { remaining: viewer.revealRemaining, bombTime: b.remaining }
           : null,
       } : null,

@@ -24,7 +24,9 @@ const CONFIG = {
 
   // ---- Shield / Curse / Magnifying Glass ----
   ShieldDuration: 5.0,
-  RevealDuration: 3.0,                    // magnifying glass private timer reveal
+  RevealDuration: 3.0,                    // magnifying glass: how long the equipped window lasts
+  MagnifyCastLength: 620,                 // box-cast length from the seat, along the aim direction
+  MagnifyCastWidth: 90,                   // box-cast full width (perpendicular to the aim direction)
 
   // ---- Coin economy (integers only) ----
   StartingCoins: 0,
