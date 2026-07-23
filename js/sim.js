@@ -30,6 +30,13 @@ const Sim = (() => {
   function bombWorldPos(sim) {
     const b = sim.bomb;
     if (!b) return null;
+    if (b.transfer) {
+      const t = Math.min(1, b.transfer.elapsed / b.transfer.duration);
+      return {
+        x: b.transfer.fromPos.x + (b.transfer.toPos.x - b.transfer.fromPos.x) * t,
+        y: b.transfer.fromPos.y + (b.transfer.toPos.y - b.transfer.fromPos.y) * t,
+      };
+    }
     const holder = getPlayer(sim, b.holderId);
     if (!holder) return { x: CENTER.x, y: CENTER.y };
     const seat = seatPosition(holder.seat, sim.seatCount);
@@ -66,6 +73,8 @@ const Sim = (() => {
         holdElapsed: 0,          // time since this hold started; gates the holder bonus window
         revealRemaining: 0,     // magnifying glass private reveal
         aim: { x: CENTER.x, y: CENTER.y },
+        equippedSlot: null,      // hand slot the player is currently aiming (cosmetic, public)
+        burst: null,             // in-flight multi-shot gun burst: { amount, shotsLeft, timer }
       })),
       bomb: null,
       projectiles: [],
@@ -74,6 +83,7 @@ const Sim = (() => {
       eventSeq: 0,
       phase: "reveal",          // reveal -> countdown -> playing -> exploding -> (reveal | matchover)
       phaseTimer: 0,
+      playElapsed: 0,           // real seconds since "playing" started this bomb (for the public reveal window)
       explosionAt: null,
       winnerId: null,
       time: 0,
@@ -96,15 +106,18 @@ const Sim = (() => {
       speedRemaining: 0,
       shieldRemaining: 0,
       curseActive: false,
+      transfer: null,
     };
     sim.projectiles = [];
     sim.explosionAt = null;
+    sim.playElapsed = 0;
     for (const p of sim.players) {
       p.passLock = 0;
       p.revealRemaining = 0;
       p.passiveAcc = 0;
       p.holderAcc = 0;
       p.holdElapsed = 0;
+      p.burst = null;
     }
     sim.phase = "reveal";
     sim.phaseTimer = C.InitialTimeRevealDuration;
@@ -123,6 +136,7 @@ const Sim = (() => {
       p.holderAcc = 0;
       p.holdElapsed = 0;
       p.revealRemaining = 0;
+      p.burst = null;
     }
     sim.winnerId = null;
     spawnBomb(sim);
@@ -170,14 +184,27 @@ const Sim = (() => {
     player.coins = 0;
     player.hand = [];
     player.revealRemaining = 0;
+    player.burst = null;
+    player.equippedSlot = null;
   }
 
+  // Who dies when the bomb reaches 0: normally the current holder, but while
+  // a pass transfer is in flight the victim depends on how far the bomb had
+  // traveled — before the halfway point the sender was still holding it, at
+  // or past halfway the receiver already had it.
   function explode(sim) {
-    const holder = getPlayer(sim, sim.bomb.holderId);
+    const b = sim.bomb;
+    let victim;
+    if (b.transfer) {
+      const frac = b.transfer.elapsed / b.transfer.duration;
+      victim = getPlayer(sim, frac < 0.5 ? b.transfer.fromId : b.transfer.toId);
+    } else {
+      victim = getPlayer(sim, b.holderId);
+    }
     sim.explosionAt = bombWorldPos(sim);
-    if (holder) {
-      eliminate(sim, holder);
-      addEvent(sim, `BOOM! ${holder.name} was eliminated`);
+    if (victim) {
+      eliminate(sim, victim);
+      addEvent(sim, `BOOM! ${victim.name} was eliminated`);
     }
     sim.bomb = null;
     sim.projectiles = [];
@@ -193,9 +220,25 @@ const Sim = (() => {
     p.disconnected = true;
     if (!p.alive) return;
     addEvent(sim, `${p.name} disconnected`);
-    const heldBomb = sim.bomb && sim.bomb.holderId === p.id;
+    const heldBomb = sim.bomb && sim.bomb.holderId === p.id && !sim.bomb.transfer;
+    const inTransfer = sim.bomb && sim.bomb.transfer &&
+      (sim.bomb.transfer.fromId === p.id || sim.bomb.transfer.toId === p.id);
     eliminate(sim, p);
-    if (heldBomb) {
+    if (inTransfer) {
+      // Mid-pass disconnect: abandon the transfer. If the sender is still
+      // around, they keep the bomb; otherwise it moves to the next alive
+      // player in order from the sender's seat.
+      const sender = getPlayer(sim, sim.bomb.transfer.fromId);
+      const fromSeat = sender ? sender.seat : p.seat;
+      sim.bomb.transfer = null;
+      const next = (sender && sender.alive) ? sender : nextAliveFrom(sim, fromSeat);
+      if (next && sim.phase === "playing") {
+        giveBomb(sim, next);
+        addEvent(sim, `The bomb moved to ${next.name}`);
+      } else {
+        sim.bomb.holderId = null;
+      }
+    } else if (heldBomb) {
       const next = nextAliveFrom(sim, p.seat);
       if (next && sim.phase === "playing") {
         giveBomb(sim, next);
@@ -252,8 +295,9 @@ const Sim = (() => {
       }
 
       case "shield":
-        // Only the current bomb holder may shield; otherwise the card stays.
-        if (b.holderId !== p.id) return;
+        // Only the current bomb holder may shield, and not while it's
+        // already in flight mid-pass; otherwise the card stays in hand.
+        if (b.holderId !== p.id || b.transfer) return;
         b.shieldRemaining = C.ShieldDuration;
         consume();
         addEvent(sim, `SHIELD ACTIVATED (${p.name})`, ...posArgs(bombWorldPos(sim)));
@@ -266,30 +310,17 @@ const Sim = (() => {
         break;
 
       case "projectile": {
+        // A player holding a weapon needs both hands free to aim it, and the
+        // bomb holder's hands are full holding the bomb.
+        if (b.holderId === p.id) return;
         // Real 2D projectiles (never hitscan), fired from the player's hand
         // position toward their current mouse aim. The card is consumed even
-        // if every shot misses. -Time Gun cards fire a short burst instead of
-        // a single bullet; +Time Repair Kits stay a single throw.
-        const seat = seatPosition(p.seat, sim.seatCount);
-        let dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
-        const len = Math.hypot(dx, dy);
-        if (len < 0.001) { dx = 0; dy = -1; } else { dx /= len; dy /= len; }
-        const baseAngle = Math.atan2(dy, dx);
-        const count = def.amount < 0 ? C.GunBurstCount : 1;
-        const spread = (C.GunBurstSpreadDeg * Math.PI) / 180;
-        for (let i = 0; i < count; i++) {
-          const offset = count > 1 ? (i / (count - 1) - 0.5) * spread : 0;
-          const a = baseAngle + offset;
-          const bx = Math.cos(a), by = Math.sin(a);
-          sim.projectiles.push({
-            id: sim.nextProjId++,
-            ownerId: p.id,
-            amount: def.amount,
-            x: seat.x + bx * C.MuzzleOffset,
-            y: seat.y + by * C.MuzzleOffset,
-            vx: bx * C.ProjectileSpeed,
-            vy: by * C.ProjectileSpeed,
-          });
+        // if every shot misses. -Time Gun cards fire C.GunBurstCount separate
+        // shots one after another (not a simultaneous spread) so the player
+        // can re-aim between shots; +Time Repair Kits stay a single throw.
+        fireProjectile(sim, p, def.amount);
+        if (def.amount < 0 && C.GunBurstCount > 1) {
+          p.burst = { amount: def.amount, shotsLeft: C.GunBurstCount - 1, timer: C.GunShotInterval };
         }
         consume();
         addEvent(sim, `${p.name} used ${def.name}`);
@@ -299,6 +330,25 @@ const Sim = (() => {
   }
 
   function posArgs(pos) { return pos ? [pos.x, pos.y] : []; }
+
+  // Spawns one real 2D projectile from the player's seat toward their current
+  // aim. Reads p.aim fresh each call so successive shots in a burst can be
+  // re-aimed between shots.
+  function fireProjectile(sim, p, amount) {
+    const seat = seatPosition(p.seat, sim.seatCount);
+    let dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001) { dx = 0; dy = -1; } else { dx /= len; dy /= len; }
+    sim.projectiles.push({
+      id: sim.nextProjId++,
+      ownerId: p.id,
+      amount,
+      x: seat.x + dx * C.MuzzleOffset,
+      y: seat.y + dy * C.MuzzleOffset,
+      vx: dx * C.ProjectileSpeed,
+      vy: dy * C.ProjectileSpeed,
+    });
+  }
 
   // ---- Projectiles ---------------------------------------------------------
 
@@ -320,8 +370,8 @@ const Sim = (() => {
           // Shield: projectile still vanishes, but no time effect.
           addEvent(sim, "SHIELD BLOCKED IT", bombPos.x, bombPos.y);
         } else if (pr.amount < 0) {
-          // Safety rule: reductions can never zero the bomb directly.
-          b.remaining = Math.max(b.remaining + pr.amount, C.MinimumBombTimeAfterReduction);
+          // No floor: a gun hit can bring the bomb straight to 0 and detonate it.
+          b.remaining += pr.amount;
           addEvent(sim, `${pr.amount} SEC`, bombPos.x, bombPos.y);
         } else {
           // No upper limit on bomb time.
@@ -414,6 +464,10 @@ const Sim = (() => {
   function stepPlaying(sim, inputs, dt) {
     const b = sim.bomb;
 
+    // Real-time window right after gameplay starts where the remaining time
+    // is shown to everyone, before it goes hidden for the rest of the bomb.
+    sim.playElapsed += dt;
+
     // Bomb countdown, scaled by the (non-stacking) speed modifier.
     if (b.speedRemaining > 0) {
       b.speedRemaining -= dt;
@@ -422,11 +476,47 @@ const Sim = (() => {
     if (b.shieldRemaining > 0) b.shieldRemaining = Math.max(0, b.shieldRemaining - dt);
     b.remaining -= dt * b.speedMult;
 
+    // Advance an in-flight pass. The bomb keeps counting down while it
+    // travels, so explode() below still has the right transfer state if it
+    // reaches 0 mid-pass.
+    if (b.transfer) {
+      b.transfer.elapsed += dt;
+      if (b.transfer.elapsed >= b.transfer.duration) {
+        const receiver = getPlayer(sim, b.transfer.toId);
+        const sender = getPlayer(sim, b.transfer.fromId);
+        b.transfer = null;
+        if (receiver && receiver.alive) {
+          giveBomb(sim, receiver);
+          addEvent(sim, `${receiver.name} received the bomb`);
+        } else if (sender && sender.alive) {
+          giveBomb(sim, sender); // receiver vanished mid-pass: bomb stays home
+        }
+      }
+    }
+
     const holder = getPlayer(sim, b.holderId);
 
     for (const p of sim.players) {
       if (!p.alive) continue;
       const inp = inputs[p.id] || {};
+
+      // Cosmetic only: which hand slot (if any) this player is currently
+      // aiming, so everyone can see they're wielding a thrown/fired weapon.
+      p.equippedSlot = (typeof inp.equip === "number" && p.hand[inp.equip]
+        && Cards.TYPES[p.hand[inp.equip]].kind === "projectile") ? inp.equip : null;
+
+      // Continue a multi-shot gun burst: each shot re-reads the player's
+      // current aim, so it's a fast sequence of separate shots, not a
+      // simultaneous spread.
+      if (p.burst) {
+        p.burst.timer -= dt;
+        if (p.burst.timer <= 0) {
+          fireProjectile(sim, p, p.burst.amount);
+          p.burst.shotsLeft--;
+          if (p.burst.shotsLeft <= 0) p.burst = null;
+          else p.burst.timer = C.GunShotInterval;
+        }
+      }
 
       // Income: passive for everyone alive, plus a holder bonus on top.
       p.passiveAcc += dt;
@@ -452,8 +542,10 @@ const Sim = (() => {
       if (p.revealRemaining > 0) p.revealRemaining = Math.max(0, p.revealRemaining - dt);
 
       // Holder-only: arm control and passing. The client only sends a mouse
-      // position; the host computes and clamps the actual bomb offset.
-      if (p === holder) {
+      // position; the host computes and clamps the actual bomb offset. Once
+      // a pass is thrown the bomb is in flight (b.transfer) and the sender
+      // loses arm control until it either arrives or explodes mid-transfer.
+      if (p === holder && !b.transfer) {
         p.passLock = Math.max(0, p.passLock - dt);
         const seat = seatPosition(p.seat, sim.seatCount);
         const dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
@@ -465,8 +557,15 @@ const Sim = (() => {
         if (inp.pass && p.passLock <= 0) {
           const next = nextAliveFrom(sim, p.seat);
           if (next && next !== p) {
-            giveBomb(sim, next);
-            addEvent(sim, `${p.name} passed the bomb to ${next.name}`);
+            b.transfer = {
+              fromId: p.id,
+              toId: next.id,
+              elapsed: 0,
+              duration: C.BombPassTransferDuration,
+              fromPos: bombWorldPos(sim),
+              toPos: seatPosition(next.seat, sim.seatCount),
+            };
+            addEvent(sim, `${p.name} is passing the bomb to ${next.name}...`);
           }
         }
       }
@@ -518,10 +617,21 @@ const Sim = (() => {
         shield: b.shieldRemaining > 0,     // announced publicly, so visible
         curse: b.curseActive,              // announced publicly, so visible
         speedMult: b.speedMult,            // Speed Up/Down are announced publicly too
+        transferring: !!b.transfer,        // in flight between seats: render it mid-pass
+        // Public reveal window: everyone can see the exact remaining time for
+        // the first few real seconds of a bomb, then it goes hidden as usual.
+        publicRemaining: (sim.phase === "playing" && sim.playElapsed < C.PublicTimeRevealDuration)
+          ? b.remaining : null,
       } : null,
       players: sim.players.map(p => {
         const seat = seatPosition(p.seat, sim.seatCount);
-        return { id: p.id, name: p.name, seat: p.seat, x: seat.x, y: seat.y, alive: p.alive };
+        const equipped = p.equippedSlot != null;
+        return {
+          id: p.id, name: p.name, seat: p.seat, x: seat.x, y: seat.y, alive: p.alive,
+          equipped,                          // wielding a throwable/gun card — visible to everyone
+          aimX: equipped ? p.aim.x : null,
+          aimY: equipped ? p.aim.y : null,
+        };
       }),
       you: viewer ? {
         id: viewer.id,
@@ -530,8 +640,12 @@ const Sim = (() => {
         hand: viewer.hand.slice(),
         isHolder: !!(b && b.holderId === viewerId),
         passLock: viewer.passLock,
-        canPass: !!(b && b.holderId === viewerId && viewer.passLock <= 0 && sim.phase === "playing"),
-        reveal: (viewer.revealRemaining > 0 && b && sim.phase === "playing")
+        canPass: !!(b && !b.transfer && b.holderId === viewerId && viewer.passLock <= 0 && sim.phase === "playing"),
+        // Spectators (eliminated, waiting out the match) always see the exact
+        // bomb time — they can no longer affect gameplay, so there's nothing
+        // left to hide from them. Living players still need a Magnifying
+        // Glass for this.
+        reveal: (b && sim.phase === "playing" && (!viewer.alive || viewer.revealRemaining > 0))
           ? { remaining: viewer.revealRemaining, bombTime: b.remaining }
           : null,
       } : null,

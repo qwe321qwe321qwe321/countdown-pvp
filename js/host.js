@@ -82,12 +82,13 @@ const Host = (() => {
     // ticks is lost).
     function accumulate(pid, inc) {
       let buf = remoteInputs.get(pid);
-      if (!buf) { buf = { mx: null, my: null, pass: false, draw: false, use: [], discard: [] }; remoteInputs.set(pid, buf); }
+      if (!buf) { buf = { mx: null, my: null, pass: false, draw: false, use: [], discard: [], equip: null }; remoteInputs.set(pid, buf); }
       if (inc.mx != null) { buf.mx = inc.mx; buf.my = inc.my; }
       buf.pass = buf.pass || !!inc.pass;
       buf.draw = buf.draw || !!inc.draw;
       if (Array.isArray(inc.use) && inc.use.length) buf.use.push(...inc.use);
       if (Array.isArray(inc.discard) && inc.discard.length) buf.discard.push(...inc.discard);
+      buf.equip = (inc.equip == null) ? null : inc.equip; // latest wins, like mouse position
     }
 
     // ---- Lobby controls (host UI) ----
@@ -137,7 +138,7 @@ const Host = (() => {
         if (p) inputs[pid] = AI.botInput(sim, p, brain);
       }
       for (const [pid, buf] of remoteInputs) {
-        inputs[pid] = { mx: buf.mx, my: buf.my, pass: buf.pass, draw: buf.draw, use: buf.use.slice(), discard: buf.discard.slice() };
+        inputs[pid] = { mx: buf.mx, my: buf.my, pass: buf.pass, draw: buf.draw, use: buf.use.slice(), discard: buf.discard.slice(), equip: buf.equip };
         buf.pass = false; buf.draw = false; buf.use = []; buf.discard = [];
       }
       return inputs;
@@ -145,7 +146,7 @@ const Host = (() => {
 
     function stripPresses(inputs) {
       for (const pid in inputs) {
-        inputs[pid] = { mx: inputs[pid].mx, my: inputs[pid].my, pass: false, draw: false, use: [], discard: [] };
+        inputs[pid] = { mx: inputs[pid].mx, my: inputs[pid].my, pass: false, draw: false, use: [], discard: [], equip: inputs[pid].equip };
       }
     }
 

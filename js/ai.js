@@ -65,19 +65,16 @@ const AI = (() => {
         if (sim.time >= brain.holdUntil) { inp.pass = true; brain.holdUntil = null; }
       }
 
-      // Defensive cards while holding.
+      // Defensive cards while holding. Both hands are on the bomb, so the
+      // holder can't wield a thrown weapon (repair kits included) — only
+      // non-projectile cards are an option here.
       const shieldSlot = findSlot(player, d => d.kind === "shield");
       if (threat && shieldSlot >= 0 && b.shieldRemaining <= 0) {
         inp.use.push(shieldSlot);
       } else if (sim.time >= brain.nextActAt) {
         const slow = findSlot(player, d => d.kind === "speed" && d.mult < 1);
-        const repair = findSlot(player, d => d.kind === "projectile" && d.amount > 0);
         if (slow >= 0 && b.speedMult >= 1) {
           inp.use.push(slow);
-        } else if (repair >= 0 && b.shieldRemaining <= 0) {
-          // Throw the repair kit at our own bomb (short, easy shot).
-          inp.mx = bombPos.x; inp.my = bombPos.y;
-          inp.use.push(repair);
         }
         brain.nextActAt = sim.time + 1.5 + Math.random() * 3;
       }

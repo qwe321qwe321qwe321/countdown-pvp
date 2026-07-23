@@ -17,7 +17,7 @@
   // One shared shape for host-local play and network clients: mouse position
   // is continuous, presses accumulate until take() is called.
   function makeCollector() {
-    const state = { mx: null, my: null, pass: false, draw: false, use: [], discard: [], debug: false };
+    const state = { mx: null, my: null, pass: false, draw: false, use: [], discard: [], debug: false, equip: null };
     return {
       setMouse(x, y) { state.mx = x; state.my = y; },
       pressPass() { state.pass = true; },
@@ -25,11 +25,13 @@
       pressUse(slot) { state.use.push(slot); },
       pressDiscard(slot) { state.discard.push(slot); },
       setDebug(v) { state.debug = v; },
+      setEquip(slot) { state.equip = slot; },
       peek() { return state; },
       take() {
         const out = {
           mx: state.mx, my: state.my, pass: state.pass, draw: state.draw,
           use: state.use.slice(), discard: state.discard.slice(), debug: state.debug,
+          equip: state.equip,
         };
         state.pass = false; state.draw = false; state.use = []; state.discard = [];
         return out;
@@ -87,13 +89,17 @@
     const cardId = you && you.hand[slot];
     if (!cardId) return;
     if (Cards.TYPES[cardId].kind === "projectile") {
+      // Both hands are full holding the bomb — the holder can't wield a
+      // weapon too, so arming does nothing while you're the current holder.
+      if (you.isHolder) return;
       armedSlot = (armedSlot === slot) ? null : slot;
+      collector.setEquip(armedSlot);
     } else {
       collector.pressUse(slot);
     }
   }
 
-  function cancelAim() { armedSlot = null; }
+  function cancelAim() { armedSlot = null; collector.setEquip(null); }
 
   canvas.addEventListener("click", e => {
     if (armedSlot == null) return;
@@ -101,6 +107,7 @@
     collector.setMouse(p.x, p.y);
     collector.pressUse(armedSlot);
     armedSlot = null;
+    collector.setEquip(null);
   });
   canvas.addEventListener("contextmenu", e => { if (armedSlot != null) { e.preventDefault(); cancelAim(); } });
 
@@ -128,8 +135,9 @@
       // Drop the armed card if it left the hand (used elsewhere, discarded,
       // died, or the phase changed) so the UI never shows a stale aim state.
       const you = latestSnap.you;
-      if (armedSlot != null && (!you || !you.hand[armedSlot] || latestSnap.phase !== "playing")) {
+      if (armedSlot != null && (!you || !you.hand[armedSlot] || you.isHolder || latestSnap.phase !== "playing")) {
         armedSlot = null;
+        collector.setEquip(null);
       }
       canvas.style.cursor = armedSlot != null ? "pointer" : "crosshair";
 

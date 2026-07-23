@@ -57,10 +57,16 @@ const Render = (() => {
       ctx.fillStyle = p.alive ? "#e8e8e8" : "#767e8a";
       const tag = p.id === myId ? " (you)" : "";
       ctx.fillText(p.name + tag, p.x, p.y - C.PlayerBodyRadius - 10);
+
+      // A player aiming a projectile card holds it visibly for everyone to
+      // see — and since both their hands are busy, they can't be the bomb
+      // holder at the same time.
+      if (p.alive && p.equipped) drawWeaponPose(ctx, p, cx, cy);
     }
 
-    // Arms: body -> hands -> bomb, only for the current holder.
-    if (snap.bomb && holder && holder.alive) {
+    // Arms: body -> hands -> bomb, only for the current holder, and only
+    // while the bomb isn't mid-flight between seats (nobody's arms are on it).
+    if (snap.bomb && !snap.bomb.transferring && holder && holder.alive) {
       drawArms(ctx, holder, snap.bomb);
     }
 
@@ -140,6 +146,34 @@ const Render = (() => {
     }
   }
 
+  // Public pose for a player who has a projectile card armed: a single raised
+  // arm pointing toward their aim, tipped with a small weapon marker. Purely
+  // cosmetic — the actual shot only fires once they click.
+  function drawWeaponPose(ctx, p, cx, cy) {
+    let dx, dy;
+    if (p.aimX != null) {
+      dx = p.aimX - p.x; dy = p.aimY - p.y;
+    } else {
+      dx = cx - p.x; dy = cy - p.y;
+    }
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    const col = SEAT_COLORS[p.seat % SEAT_COLORS.length];
+    const hx = p.x + dx * (C.PlayerBodyRadius + 18);
+    const hy = p.y + dy * (C.PlayerBodyRadius + 18);
+    ctx.lineWidth = 6;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(p.x + dx * 6, p.y + dy * 6);
+    ctx.lineTo(hx, hy);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(hx, hy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#e8e8e8";
+    ctx.fill();
+  }
+
   function drawBomb(ctx, snap) {
     const b = snap.bomb;
     // Shield ring.
@@ -199,6 +233,14 @@ const Render = (() => {
       ctx.fillText(fast ? `⚡ SPEED x${snap.bomb.speedMult}` : `🐌 SPEED x${snap.bomb.speedMult}`, cx, 26);
     }
 
+    // The first few real seconds of a bomb are shown to everyone, then it
+    // goes hidden for the rest of the hold like normal.
+    if (snap.bomb && snap.bomb.publicRemaining != null) {
+      ctx.font = "bold 26px monospace";
+      ctx.fillStyle = "#ffe27a";
+      ctx.fillText(snap.bomb.publicRemaining.toFixed(1) + "s", cx, 56);
+    }
+
     if (snap.phase === "reveal" && snap.bomb) {
       ctx.font = "bold 42px sans-serif";
       ctx.fillStyle = "#ffce54";
@@ -219,7 +261,10 @@ const Render = (() => {
     // Pass UI — only the current holder needs it.
     if (snap.you && snap.you.isHolder && snap.phase === "playing") {
       ctx.font = "bold 24px sans-serif";
-      if (snap.you.canPass) {
+      if (snap.bomb && snap.bomb.transferring) {
+        ctx.fillStyle = "#c6cdd6";
+        ctx.fillText("PASSING...", cx, C.WorldHeight - 24);
+      } else if (snap.you.canPass) {
         ctx.fillStyle = "#7dff9b";
         ctx.fillText("PASS  (SPACE)", cx, C.WorldHeight - 24);
       } else {
@@ -296,7 +341,8 @@ const Render = (() => {
 
       if (you.isHolder && snap.phase === "playing") {
         dom.btnPass.disabled = !you.canPass;
-        dom.btnPass.textContent = you.canPass ? "Pass Bomb (Space)" : `Pass Lock ${you.passLock.toFixed(1)}s`;
+        dom.btnPass.textContent = (snap.bomb && snap.bomb.transferring) ? "Passing..."
+          : you.canPass ? "Pass Bomb (Space)" : `Pass Lock ${you.passLock.toFixed(1)}s`;
       } else {
         dom.btnPass.disabled = true;
         dom.btnPass.textContent = "Pass Bomb (Space)";
@@ -338,7 +384,11 @@ const Render = (() => {
       if (!you.alive || snap.phase !== "playing") return false;
       const cardId = you.hand[slot];
       if (!cardId) return false;
-      if (Cards.TYPES[cardId].kind === "shield" && !you.isHolder) return false;
+      const kind = Cards.TYPES[cardId].kind;
+      if (kind === "shield" && !you.isHolder) return false;
+      // Both hands are full holding the bomb — the holder can't wield a
+      // thrown/fired weapon at the same time.
+      if (kind === "projectile" && you.isHolder) return false;
       return true;
     };
   }

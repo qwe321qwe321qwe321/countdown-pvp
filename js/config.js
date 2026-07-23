@@ -13,9 +13,8 @@ const CONFIG = {
   // ---- Passing ----
   BaseMinimumHoldTime: 1.0,               // pass lock after receiving the bomb
   CurseMinimumHoldTime: 5.0,              // pass lock when receiving a cursed bomb
-
-  // ---- Bomb time modification ----
-  MinimumBombTimeAfterReduction: 1.0,     // -Time hits can never drop the bomb below this
+  BombPassTransferDuration: 0.5,          // travel time while the bomb is mid-pass between seats
+  PublicTimeRevealDuration: 10.0,         // real seconds, right after gameplay starts, the timer is shown to everyone
 
   // ---- Speed modifiers (override, never stack) ----
   FastBombMultiplier: 2.0,
@@ -65,7 +64,7 @@ const CONFIG = {
   ProjectileRadius: 5,
   MuzzleOffset: 32,                       // spawn distance from body center toward aim
   GunBurstCount: 3,                       // -Time Gun cards fire this many bullets per use
-  GunBurstSpreadDeg: 10,                  // total spread angle across the burst
+  GunShotInterval: 0.12,                  // delay between shots in a burst (not simultaneous spread)
 
   // ---- Session ----
   MaxPlayers: 8,
