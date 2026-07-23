@@ -561,13 +561,16 @@ const Sim = (() => {
         if (inp.pass && p.passLock <= 0) {
           const next = nextAliveFrom(sim, p.seat);
           if (next && next !== p) {
+            const fromPos = bombWorldPos(sim);
+            const toPos = seatPosition(next.seat, sim.seatCount);
+            const dist = Math.hypot(toPos.x - fromPos.x, toPos.y - fromPos.y);
             b.transfer = {
               fromId: p.id,
               toId: next.id,
               elapsed: 0,
-              duration: C.BombPassTransferDuration,
-              fromPos: bombWorldPos(sim),
-              toPos: seatPosition(next.seat, sim.seatCount),
+              duration: Math.max(0.001, dist / C.BombPassSpeed),
+              fromPos,
+              toPos,
             };
             addEvent(sim, `${p.name} is passing the bomb to ${next.name}...`);
           }
