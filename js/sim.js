@@ -197,8 +197,9 @@ const Sim = (() => {
 
   function nextAliveFrom(sim, seat) {
     for (let k = 1; k <= sim.seatCount; k++) {
-      const p = sim.players[(seat + k) % sim.seatCount];
-      if (p.alive) return p;
+      const wantSeat = (seat + k) % sim.seatCount;
+      const p = sim.players.find(pl => pl.seat === wantSeat);
+      if (p && p.alive) return p;
     }
     return null;
   }
