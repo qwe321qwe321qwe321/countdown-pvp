@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Countdown PvP — Prototype</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #14161a; color: #e8e8e8; font-family: "Segoe UI", sans-serif; }
+    #wrap { display: flex; flex-direction: column; align-items: center; padding: 12px; gap: 8px; }
+    canvas { background: #1e222a; border: 2px solid #3a4150; border-radius: 6px; cursor: crosshair; }
+    #help { max-width: 960px; font-size: 13px; color: #9aa4b2; line-height: 1.6; }
+    #help b { color: #d6dde6; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="game" width="960" height="640"></canvas>
+    <div id="help">
+      <b>Move:</b> WASD / arrows &nbsp;·&nbsp;
+      <b>Holding the bomb:</b> mouse drags your arms — the bomb follows your hands (max reach = BombArmReach). Dodge red −5s shots, catch green +10s repairs. <b>Space</b> = shield.
+      <b>Not holding:</b> mouse aims — <b>left click</b> fires −5s, <b>right click</b> fires +10s repair. Touch the holder to take the bomb.
+      Projectiles vanish on any blocking object (walls, player bodies, bomb) — only a bomb hit applies the time effect. When the timer hits 0 the holder dies: coins and cards are wiped and they spectate until the next round.
+    </div>
+  </div>
+  <script src="js/config.js"></script>
+  <script src="js/sim.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
