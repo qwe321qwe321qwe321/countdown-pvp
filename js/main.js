@@ -78,11 +78,26 @@
     collector.setMouse(p.x, p.y);
   });
 
-  // Projectile cards need a deliberate aim: selecting one "arms" it, and the
-  // next canvas click fires it toward the click point (so a stray hand-panel
-  // click can't fire it toward wherever the mouse last happened to be).
-  // Non-projectile cards (shield/curse/speed/magnify) still use instantly.
+  // Projectile cards need a deliberate aim: selecting one "arms" it, and each
+  // canvas click fires one shot toward the click point (so a stray
+  // hand-panel click can't fire it toward wherever the mouse last happened
+  // to be). Gun cards hold several separate shots — the card stays armed
+  // across clicks until every shot is fired. Canceling before any shot is
+  // fired is free; canceling after at least one shot forfeits the rest (the
+  // card is discarded). Non-projectile cards (shield/curse/speed/magnify)
+  // still use instantly.
   let armedSlot = null;
+
+  // If the currently armed slot already has an in-progress multi-shot gun
+  // (at least one round fired), leaving it behind discards the remainder.
+  function deactivateArmed() {
+    const you = latestSnap && latestSnap.you;
+    if (armedSlot != null && you && you.gunPending && you.gunPending.slot === armedSlot) {
+      collector.pressDiscard(armedSlot);
+    }
+    armedSlot = null;
+    collector.setEquip(null);
+  }
 
   function activateCard(slot) {
     const you = latestSnap && latestSnap.you;
@@ -94,22 +109,25 @@
       // are free again even though isHolder hasn't flipped yet.
       const reallyHolding = you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring);
       if (reallyHolding) return;
-      armedSlot = (armedSlot === slot) ? null : slot;
+      if (armedSlot === slot) { deactivateArmed(); return; }
+      deactivateArmed(); // switching weapons forfeits whatever was mid-burst
+      armedSlot = slot;
       collector.setEquip(armedSlot);
     } else {
       collector.pressUse(slot);
     }
   }
 
-  function cancelAim() { armedSlot = null; collector.setEquip(null); }
+  function cancelAim() { deactivateArmed(); }
 
   canvas.addEventListener("click", e => {
     if (armedSlot == null) return;
     const p = canvasPoint(e);
     collector.setMouse(p.x, p.y);
     collector.pressUse(armedSlot);
-    armedSlot = null;
-    collector.setEquip(null);
+    // Don't clear armedSlot here: a multi-shot gun stays armed for its next
+    // click. It clears itself in frame() below once the card actually
+    // leaves the hand (last shot fired, or discarded via cancel).
   });
   canvas.addEventListener("contextmenu", e => { if (armedSlot != null) { e.preventDefault(); cancelAim(); } });
 

@@ -74,7 +74,7 @@ const Sim = (() => {
         revealRemaining: 0,     // magnifying glass private reveal
         aim: { x: CENTER.x, y: CENTER.y },
         equippedSlot: null,      // hand slot the player is currently aiming (cosmetic, public)
-        burst: null,             // in-flight multi-shot gun burst: { amount, shotsLeft, timer }
+        gunPending: null,        // multi-click gun card mid-use: { cardId, slot, shotsLeft }
       })),
       bomb: null,
       projectiles: [],
@@ -117,7 +117,7 @@ const Sim = (() => {
       p.passiveAcc = 0;
       p.holderAcc = 0;
       p.holdElapsed = 0;
-      p.burst = null;
+      p.gunPending = null;
     }
     sim.phase = "reveal";
     sim.phaseTimer = C.InitialTimeRevealDuration;
@@ -136,7 +136,7 @@ const Sim = (() => {
       p.holderAcc = 0;
       p.holdElapsed = 0;
       p.revealRemaining = 0;
-      p.burst = null;
+      p.gunPending = null;
     }
     sim.winnerId = null;
     spawnBomb(sim);
@@ -184,7 +184,7 @@ const Sim = (() => {
     player.coins = 0;
     player.hand = [];
     player.revealRemaining = 0;
-    player.burst = null;
+    player.gunPending = null;
     player.equippedSlot = null;
   }
 
@@ -266,6 +266,7 @@ const Sim = (() => {
   function discardCard(sim, p, slot) {
     const cardId = p.hand[slot];
     if (!cardId) return;
+    if (p.gunPending && p.gunPending.slot === slot) p.gunPending = null;
     p.hand.splice(slot, 1);
     addEvent(sim, `${p.name} discarded ${Cards.TYPES[cardId].name}`);
   }
@@ -316,16 +317,30 @@ const Sim = (() => {
         // again even though b.holderId hasn't formally changed yet.
         if (b.holderId === p.id && !b.transfer) return;
         // Real 2D projectiles (never hitscan), fired from the player's hand
-        // position toward their current mouse aim. The card is consumed even
-        // if every shot misses. -Time Gun cards fire C.GunBurstCount separate
-        // shots one after another (not a simultaneous spread) so the player
-        // can re-aim between shots; +Time Repair Kits stay a single throw.
-        fireProjectile(sim, p, def.amount);
-        if (def.amount < 0 && C.GunBurstCount > 1) {
-          p.burst = { amount: def.amount, shotsLeft: C.GunBurstCount - 1, timer: C.GunShotInterval };
+        // toward their current mouse aim. +Time Repair Kits are a single
+        // throw, consumed immediately. -Time Gun cards hold C.GunBurstCount
+        // separate shots: each press here fires exactly one (re-aimed at the
+        // current mouse position), and the card is only consumed once every
+        // shot is spent — or earlier, if the player cancels and the
+        // unfired rounds are discarded (see discardCard).
+        if (def.amount < 0) {
+          let pending = p.gunPending;
+          if (!pending || pending.cardId !== cardId || pending.slot !== slot) {
+            pending = { cardId, slot, shotsLeft: C.GunBurstCount };
+            p.gunPending = pending;
+          }
+          fireProjectile(sim, p, def.amount);
+          pending.shotsLeft--;
+          addEvent(sim, `${p.name} fired ${def.name}`);
+          if (pending.shotsLeft <= 0) {
+            p.gunPending = null;
+            consume();
+          }
+        } else {
+          fireProjectile(sim, p, def.amount);
+          consume();
+          addEvent(sim, `${p.name} used ${def.name}`);
         }
-        consume();
-        addEvent(sim, `${p.name} used ${def.name}`);
         break;
       }
     }
@@ -507,19 +522,6 @@ const Sim = (() => {
       p.equippedSlot = (typeof inp.equip === "number" && p.hand[inp.equip]
         && Cards.TYPES[p.hand[inp.equip]].kind === "projectile") ? inp.equip : null;
 
-      // Continue a multi-shot gun burst: each shot re-reads the player's
-      // current aim, so it's a fast sequence of separate shots, not a
-      // simultaneous spread.
-      if (p.burst) {
-        p.burst.timer -= dt;
-        if (p.burst.timer <= 0) {
-          fireProjectile(sim, p, p.burst.amount);
-          p.burst.shotsLeft--;
-          if (p.burst.shotsLeft <= 0) p.burst = null;
-          else p.burst.timer = C.GunShotInterval;
-        }
-      }
-
       // Income: passive for everyone alive, plus a holder bonus on top.
       p.passiveAcc += dt;
       while (p.passiveAcc >= C.PassiveCoinInterval) {
@@ -641,6 +643,10 @@ const Sim = (() => {
         coins: viewer.coins,
         hand: viewer.hand.slice(),
         isHolder: !!(b && b.holderId === viewerId),
+        // Present once at least one shot of a multi-click gun has already
+        // been fired: canceling now must discard the unfired rounds rather
+        // than leaving the card untouched.
+        gunPending: viewer.gunPending ? { slot: viewer.gunPending.slot, shotsLeft: viewer.gunPending.shotsLeft } : null,
         passLock: viewer.passLock,
         canPass: !!(b && !b.transfer && b.holderId === viewerId && viewer.passLock <= 0 && sim.phase === "playing"),
         // Spectators (eliminated, waiting out the match) always see the exact

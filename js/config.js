@@ -64,8 +64,8 @@ const CONFIG = {
   ProjectileSpeed: 380,
   ProjectileRadius: 5,
   MuzzleOffset: 32,                       // spawn distance from body center toward aim
-  GunBurstCount: 3,                       // -Time Gun cards fire this many bullets per use
-  GunShotInterval: 0.12,                  // delay between shots in a burst (not simultaneous spread)
+  GunBurstCount: 3,                       // -Time Gun cards can be fired this many separate times per use
+  AimLineLength: 520,                     // how far a wielded weapon's sight line reaches
 
   // ---- Session ----
   MaxPlayers: 8,

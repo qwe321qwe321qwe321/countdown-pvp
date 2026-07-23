@@ -172,6 +172,17 @@ const Render = (() => {
     ctx.arc(hx, hy, 5, 0, Math.PI * 2);
     ctx.fillStyle = "#e8e8e8";
     ctx.fill();
+
+    // Sight line: shows everyone exactly where this weapon is pointed.
+    ctx.save();
+    ctx.setLineDash([10, 8]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,255,255,0.45)";
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx + dx * C.AimLineLength, hy + dy * C.AimLineLength);
+    ctx.stroke();
+    ctx.restore();
   }
 
   function drawBomb(ctx, snap) {
