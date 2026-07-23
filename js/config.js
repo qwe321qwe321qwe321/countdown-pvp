@@ -19,7 +19,10 @@ const CONFIG = {
   // ---- Speed modifiers (override, never stack) ----
   FastBombMultiplier: 2.0,
   FastBombDuration: 4.0,
-  SlowBombMultiplier: 0.5,
+  // 0 = full freeze: the bomb timer stops entirely, and while frozen the bomb
+  // is also invincible — gun/repair hits that land on it during this window
+  // are blocked with no time effect, same as Shield (see stepProjectiles).
+  SlowBombMultiplier: 0,
   SlowBombDuration: 4.0,
 
   // ---- Shield / Curse / Magnifying Glass ----
@@ -61,6 +64,7 @@ const CONFIG = {
   PlayerBodyRadius: 24,
   BombRadius: 26,                         // 2x the original 13 — also grows the bomb's collider
   BombArmReach: 80,                       // max arm-controlled bomb offset from the seat
+  BombArmMoveSpeed: 260,                  // world units/sec the bomb's arm-controlled offset can move — arm motion is not instant
 
   // ---- Projectiles ----
   ProjectileSpeed: 900,                   // world units/sec — tune this if shots feel too slow/fast
@@ -68,6 +72,10 @@ const CONFIG = {
   MuzzleOffset: 32,                       // spawn distance from body center toward aim
   GunBurstCount: 3,                       // -Time Gun cards can be fired this many separate times per use
   AimLineLength: 520,                     // how far a wielded weapon's sight line reaches
+
+  // ---- Bots ----
+  BotAimDuration: 0.35,                   // seconds a bot must hold its weapon raised & aimed before it actually fires
+  BotAimJitter: 0.35,                     // extra random 0..this seconds added on top, so bots don't all fire in lockstep
 
   // ---- Session ----
   MaxPlayers: 8,

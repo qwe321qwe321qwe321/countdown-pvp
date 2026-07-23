@@ -126,9 +126,11 @@ const Render = (() => {
   function bgColorFor(snap) {
     const base = { r: 0x14, g: 0x16, b: 0x1a };
     const mult = snap.bomb ? snap.bomb.speedMult : 1;
-    if (!mult || mult === 1) return `rgb(${base.r},${base.g},${base.b})`;
+    if (mult === 1) return `rgb(${base.r},${base.g},${base.b})`;
     const pulse = 0.5 + 0.5 * Math.sin(snap.time * 6);
-    const tint = mult > 1 ? { r: 0x6a, g: 0x1a, b: 0x1a } : { r: 0x1a, g: 0x38, b: 0x6a };
+    // 0 = fully frozen (icy tint, and the bomb is invincible while it lasts).
+    const tint = mult === 0 ? { r: 0x1a, g: 0x5a, b: 0x6a }
+      : mult > 1 ? { r: 0x6a, g: 0x1a, b: 0x1a } : { r: 0x1a, g: 0x38, b: 0x6a };
     const k = 0.12 + pulse * 0.10;
     const mix = (a, b) => Math.round(a + (b - a) * k);
     return `rgb(${mix(base.r, tint.r)},${mix(base.g, tint.g)},${mix(base.b, tint.b)})`;
@@ -256,7 +258,7 @@ const Render = (() => {
       ctx.font = `${10 + t * 4}px sans-serif`;
       ctx.textAlign = "center";
       ctx.globalAlpha = alpha;
-      ctx.fillText("🪙", p.x + drift, p.y - C.PlayerBodyRadius - 6 - rise);
+      ctx.fillText("💰", p.x + drift, p.y - C.PlayerBodyRadius - 6 - rise);
       ctx.globalAlpha = 1;
     }
   }
@@ -324,11 +326,17 @@ const Render = (() => {
     ctx.textAlign = "center";
 
     // Speed modifier badge, top-of-screen, matching the background tint.
-    if (snap.bomb && snap.bomb.speedMult && snap.bomb.speedMult !== 1) {
-      const fast = snap.bomb.speedMult > 1;
+    if (snap.bomb && snap.bomb.speedMult !== 1) {
+      const mult = snap.bomb.speedMult;
       ctx.font = "bold 18px sans-serif";
-      ctx.fillStyle = fast ? "#ff8a6b" : "#7ec2ff";
-      ctx.fillText(fast ? `⚡ SPEED x${snap.bomb.speedMult}` : `🐌 SPEED x${snap.bomb.speedMult}`, cx, 26);
+      if (mult === 0) {
+        ctx.fillStyle = "#7ec2ff";
+        ctx.fillText("⏸️ TIME FROZEN", cx, 26);
+      } else {
+        const fast = mult > 1;
+        ctx.fillStyle = fast ? "#ff8a6b" : "#7ec2ff";
+        ctx.fillText(fast ? `⚡ SPEED x${mult}` : `🐌 SPEED x${mult}`, cx, 26);
+      }
     }
 
     if (snap.phase === "reveal" && snap.bomb) {
@@ -379,7 +387,7 @@ const Render = (() => {
     const you = snap.you;
 
     if (you) {
-      dom.coinDisplay.innerHTML = `<span class="coin-icon">🪙</span>${you.coins}`;
+      dom.coinDisplay.innerHTML = `<span class="coin-icon">💰</span>${you.coins}`;
       dom.statusLine.textContent = `Alive: ${snap.aliveCount}/${snap.players.length}` +
         (snap.bomb ? `   ·   Bomb started at ${snap.bomb.initialTime}s` : "");
     } else {

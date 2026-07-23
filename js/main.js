@@ -43,6 +43,14 @@
   const canvas = $("game");
   const ctx = canvas.getContext("2d");
 
+  // ---- Player name persistence ----
+  const NAME_KEY = "countdown-pvp:playerName";
+  const savedName = localStorage.getItem(NAME_KEY);
+  if (savedName) $("playerName").value = savedName;
+  $("playerName").addEventListener("input", () => {
+    localStorage.setItem(NAME_KEY, $("playerName").value.trim());
+  });
+
   let role = null;            // 'host' | 'client'
   let hostSession = null;
   let clientSession = null;

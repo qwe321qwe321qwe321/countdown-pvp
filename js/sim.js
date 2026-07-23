@@ -359,7 +359,8 @@ const Sim = (() => {
         b.speedMult = def.mult;
         b.speedRemaining = def.duration;
         consume();
-        addEvent(sim, `SPEED x${def.mult} (${p.name})`, ...posArgs(bombWorldPos(sim)));
+        const msg = def.mult === 0 ? `TIME FROZEN (${p.name})` : `SPEED x${def.mult} (${p.name})`;
+        addEvent(sim, msg, ...posArgs(bombWorldPos(sim)));
         break;
       }
 
@@ -454,6 +455,10 @@ const Sim = (() => {
         if (b.shieldRemaining > 0) {
           // Shield: projectile still vanishes, but no time effect.
           addEvent(sim, "SHIELD BLOCKED IT", bombPos.x, bombPos.y);
+        } else if (b.speedMult === 0 && b.speedRemaining > 0) {
+          // Frozen (Freeze Stopwatch): the bomb is invincible while time is
+          // stopped — hits still vanish the projectile but never touch time.
+          addEvent(sim, "FROZEN — NO EFFECT", bombPos.x, bombPos.y);
         } else if (pr.amount < 0) {
           // No floor: a gun hit can bring the bomb straight to 0 and detonate it.
           b.remaining += pr.amount;
@@ -610,18 +615,27 @@ const Sim = (() => {
       if (p.revealRemaining > 0) p.revealRemaining = Math.max(0, p.revealRemaining - dt);
 
       // Holder-only: arm control and passing. The client only sends a mouse
-      // position; the host computes and clamps the actual bomb offset. Once
-      // a pass is thrown the bomb is in flight (b.transfer) and the sender
-      // loses arm control until it either arrives or explodes mid-transfer.
+      // position; the host computes and clamps the actual bomb offset, then
+      // moves it toward that target at a limited speed — the arm doesn't
+      // teleport the bomb to wherever the mouse jumps to. Once a pass is
+      // thrown the bomb is in flight (b.transfer) and the sender loses arm
+      // control until it either arrives or explodes mid-transfer.
       if (p === holder && !b.transfer) {
         p.passLock = Math.max(0, p.passLock - dt);
         const seat = seatPosition(p.seat, sim.seatCount);
         const dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
         const len = Math.hypot(dx, dy);
+        let target = b.offset;
         if (len > 0.001) {
           const r = Math.min(len, C.BombArmReach);
-          b.offset = { x: (dx / len) * r, y: (dy / len) * r };
+          target = { x: (dx / len) * r, y: (dy / len) * r };
         }
+        const ox = target.x - b.offset.x, oy = target.y - b.offset.y;
+        const step = Math.hypot(ox, oy);
+        const maxStep = C.BombArmMoveSpeed * dt;
+        b.offset = (step <= maxStep || step < 0.001)
+          ? target
+          : { x: b.offset.x + (ox / step) * maxStep, y: b.offset.y + (oy / step) * maxStep };
         if (inp.pass && p.passLock <= 0) {
           const next = nextAliveFrom(sim, p.seat);
           if (next && next !== p) {

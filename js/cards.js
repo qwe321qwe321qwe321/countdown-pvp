@@ -12,7 +12,7 @@ const Cards = (() => {
     repair5:  { name: "+5s Repair Kit",   emoji: "🧰", kind: "projectile", amount: +5 },
     repair10: { name: "+10s Repair Kit",  emoji: "🛠️", kind: "projectile", amount: +10 },
     speedup:  { name: "Speed Up Stopwatch",  emoji: "⏩", kind: "speed", mult: CONFIG.FastBombMultiplier, duration: CONFIG.FastBombDuration },
-    slowdown: { name: "Slow Down Stopwatch", emoji: "⏪", kind: "speed", mult: CONFIG.SlowBombMultiplier, duration: CONFIG.SlowBombDuration },
+    slowdown: { name: "Freeze Stopwatch", emoji: "⏸️", kind: "speed", mult: CONFIG.SlowBombMultiplier, duration: CONFIG.SlowBombDuration },
     shield:   { name: "Shield", emoji: "🛡️", kind: "shield" },
     curse:    { name: "Curse",  emoji: "☠️", kind: "curse" },
   };

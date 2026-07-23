@@ -11,6 +11,8 @@ const AI = (() => {
       holdUntil: null,   // when (sim.time) to pass after the lock opens
       nextActAt: 0,      // next time this bot considers using a card
       wander: Math.random() * Math.PI * 2,
+      aimSlot: null,     // gun slot the bot has raised and is aiming, not fired yet
+      aimReadyAt: 0,     // sim.time this bot may actually pull the trigger
     };
   }
 
@@ -83,12 +85,32 @@ const AI = (() => {
       // Keep aiming at the bomb; occasionally play an offensive card.
       inp.mx = bombPos.x;
       inp.my = bombPos.y;
-      if (sim.time >= brain.nextActAt) {
+
+      if (brain.aimSlot != null) {
+        // Weapon already raised: a human has to click to arm, aim, then
+        // click again to fire, which naturally takes a beat — a bot has no
+        // such delay by default, so it holds the gun up and aimed here for
+        // BotAimDuration before actually pulling the trigger.
+        const heldCard = player.hand[brain.aimSlot];
+        if (!heldCard || Cards.TYPES[heldCard].kind !== "projectile" || b.shieldRemaining > 0) {
+          brain.aimSlot = null; // shot invalidated mid-aim (used/discarded/shielded)
+        } else {
+          inp.equip = brain.aimSlot;
+          if (sim.time >= brain.aimReadyAt) {
+            inp.use.push(brain.aimSlot);
+            brain.aimSlot = null;
+          }
+        }
+      } else if (sim.time >= brain.nextActAt) {
         const gun = findSlot(player, d => d.kind === "projectile" && d.amount < 0);
         const fast = findSlot(player, d => d.kind === "speed" && d.mult > 1);
         const curse = findSlot(player, d => d.kind === "curse");
         const magnify = findSlot(player, d => d.kind === "magnify");
-        if (gun >= 0 && b.shieldRemaining <= 0) inp.use.push(gun);
+        if (gun >= 0 && b.shieldRemaining <= 0) {
+          brain.aimSlot = gun;
+          brain.aimReadyAt = sim.time + C.BotAimDuration + Math.random() * C.BotAimJitter;
+          inp.equip = gun;
+        }
         else if (fast >= 0 && b.speedMult <= 1) inp.use.push(fast);
         else if (curse >= 0 && !b.curseActive) inp.use.push(curse);
         else if (magnify >= 0 && Math.random() < 0.5) inp.use.push(magnify);
