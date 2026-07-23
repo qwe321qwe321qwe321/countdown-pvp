@@ -218,6 +218,13 @@ const Render = (() => {
       ctx.textAlign = "center";
       ctx.fillStyle = "#ffe27a";
       ctx.fillText(snap.you.reveal.bombTime.toFixed(1) + "s", b.x, b.y + C.BombRadius + 22);
+    } else if (b.publicRemaining != null) {
+      // Opening public reveal window: same look as the Magnifying Glass,
+      // but visible to everyone and follows the bomb around.
+      ctx.font = "bold 17px monospace";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ffe27a";
+      ctx.fillText(b.publicRemaining.toFixed(1) + "s", b.x, b.y + C.BombRadius + 22);
     }
   }
 
@@ -231,14 +238,6 @@ const Render = (() => {
       ctx.font = "bold 18px sans-serif";
       ctx.fillStyle = fast ? "#ff8a6b" : "#7ec2ff";
       ctx.fillText(fast ? `⚡ SPEED x${snap.bomb.speedMult}` : `🐌 SPEED x${snap.bomb.speedMult}`, cx, 26);
-    }
-
-    // The first few real seconds of a bomb are shown to everyone, then it
-    // goes hidden for the rest of the hold like normal.
-    if (snap.bomb && snap.bomb.publicRemaining != null) {
-      ctx.font = "bold 26px monospace";
-      ctx.fillStyle = "#ffe27a";
-      ctx.fillText(snap.bomb.publicRemaining.toFixed(1) + "s", cx, 56);
     }
 
     if (snap.phase === "reveal" && snap.bomb) {
