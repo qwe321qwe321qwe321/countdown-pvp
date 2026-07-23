@@ -56,7 +56,7 @@ const CONFIG = {
   TableRadius: 185,
   SeatDistance: 245,                      // seat center distance from table center
   PlayerBodyRadius: 24,
-  BombRadius: 13,
+  BombRadius: 26,                         // 2x the original 13 — also grows the bomb's collider
   BombArmReach: 80,                       // max arm-controlled bomb offset from the seat
 
   // ---- Projectiles ----
