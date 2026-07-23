@@ -80,6 +80,6 @@ const CONFIG = {
   // ---- Session ----
   MaxPlayers: 8,
   TickRate: 60,                           // host simulation Hz
-  SnapshotRate: 20,                       // host -> client state Hz
-  InputSendRate: 30,                      // client -> host input Hz
+  SnapshotRate: 30,                       // host -> client state Hz (higher = fresher remote state, no delay tradeoff)
+  InputSendRate: 60,                      // client -> host input Hz (fresher aim/mouse reaches the host sooner)
 };
