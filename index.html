@@ -24,6 +24,7 @@
   .seat .dot { width: 12px; height: 12px; border-radius: 50%; }
   .seat .name { flex: 1; }
   #roomCode { font: bold 22px monospace; letter-spacing: 2px; background: #14161a; padding: 6px 12px; border-radius: 6px; display: inline-block; }
+  #shareLink { flex: 1; min-width: 220px; }
   #poolChecks label { margin-right: 14px; font-size: 14px; }
   canvas { background: #14161a; border: 2px solid #3a4150; border-radius: 6px; cursor: crosshair; max-width: 100%; }
   #hud { display: flex; align-items: baseline; gap: 16px; }
@@ -61,6 +62,11 @@
     <div class="panel">
       <h2>Room Code (share with other players)</h2>
       <div id="roomCode">…</div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="shareLink" readonly>
+        <button id="btnCopyLink">Copy Link</button>
+        <span id="copyStatus"></span>
+      </div>
     </div>
     <div class="panel">
       <h2>Seats</h2>

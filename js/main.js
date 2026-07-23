@@ -215,7 +215,10 @@
     hostSession = Host.createSession({
       hostName: playerName(),
       localCollector: collector,
-      onReady: code => { $("roomCode").textContent = code; },
+      onReady: code => {
+        $("roomCode").textContent = code;
+        $("shareLink").value = location.origin + location.pathname + "?room=" + code;
+      },
       onError: err => { alert("Network error: " + (err && err.type ? err.type : err)); },
       onLobby: roster => renderSeats($("hostSeatList"), roster),
       onSnapshot: snap => { latestSnap = snap; },
@@ -241,6 +244,20 @@
       wrap.appendChild(label);
     }
   }
+
+  $("btnCopyLink").onclick = async () => {
+    const link = $("shareLink").value;
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      $("copyStatus").textContent = "Copied!";
+    } catch {
+      $("shareLink").select();
+      document.execCommand("copy");
+      $("copyStatus").textContent = "Copied!";
+    }
+    setTimeout(() => { $("copyStatus").textContent = ""; }, 2000);
+  };
 
   $("btnAddBot").onclick = () => hostSession.addBot();
   $("btnRemoveBot").onclick = () => hostSession.removeBot();
@@ -282,4 +299,13 @@
       onError: err => { $("joinStatus").textContent = "Error: " + (err && err.type ? err.type : err); },
     });
   };
+
+  // ---- Join-by-link ----
+  // A host's share link is `?room=CODE`; land straight on the join screen
+  // with the code prefilled so the guest only needs to enter their name.
+  const roomParam = new URLSearchParams(location.search).get("room");
+  if (roomParam) {
+    $("joinCode").value = roomParam;
+    show("join");
+  }
 })();
