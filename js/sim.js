@@ -942,6 +942,7 @@ const Sim = (() => {
 
   function payForShopChoice(sim, p, slot) {
     if (!sim.modes.roguelikeShop || !p.alive) return true;
+    if (sim.modes.roguelikeRerollRefresh) return true;
     if (p.shopPaidSlots.has(slot)) return true;
     if (p.coins < C.CardDrawCost) return false;
     p.coins -= C.CardDrawCost;
@@ -998,7 +999,8 @@ const Sim = (() => {
   function discardCard(sim, p, slot) {
     const cardId = p.hand[slot];
     if (!cardId) return;
-    if (sim.modes.roguelikeShop && !p.shopPaidSlots.has(slot)) return;
+    if (sim.modes.roguelikeShop && !sim.modes.roguelikeRerollRefresh &&
+        !p.shopPaidSlots.has(slot)) return;
     if (p.gunPending && p.gunPending.slot === slot) p.gunPending = null;
     consumeCard(sim, p, slot);
     p.shopPaidSlots.delete(slot);

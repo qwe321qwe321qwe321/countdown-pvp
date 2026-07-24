@@ -388,7 +388,10 @@
     const rerollCost = latestSnap.modes && latestSnap.modes.roguelikeRerollRefresh
       ? CONFIG.RoguelikeRerollRefreshCost
       : CONFIG.ShopRerollCost;
-    const cost = def.kind === "reroll" ? rerollCost : CONFIG.CardDrawCost;
+    const freeChoice = shopMode && latestSnap.modes.roguelikeRerollRefresh &&
+      def.kind !== "reroll";
+    const cost = def.kind === "reroll" ? rerollCost
+      : freeChoice ? 0 : CONFIG.CardDrawCost;
     const alreadyPaid = Array.isArray(you.shopPaidSlots) && you.shopPaidSlots.includes(slot);
     if (shopMode && you.alive && !alreadyPaid && you.coins < cost) return;
     if (["projectile", "grapple"].includes(def.kind)) {

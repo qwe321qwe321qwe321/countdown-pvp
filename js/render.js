@@ -1311,7 +1311,9 @@ const Render = (() => {
 
     if (you) {
       if (dom.handTitle) dom.handTitle.textContent = shopMode
-        ? `Choose & use (${C.CardDrawCost}c each · 1-3) or reroll (${rerollCost}c · 4)`
+        ? snap.modes.roguelikeRerollRefresh
+          ? `Use free choices (1-3) · reroll (${rerollCost}c · 4)`
+          : `Choose & use (${C.CardDrawCost}c each · 1-3) or reroll (${rerollCost}c · 4)`
         : "Hand (1-5 or click)";
       // Mirrors Sim.coinIntervalScale: scale by the *current* alive count, not
       // the fixed seat count, so the shown rate speeds up as players die.
@@ -1373,7 +1375,10 @@ const Render = (() => {
             const def = Cards.TYPES[cardId];
             const paid = Array.isArray(you.shopPaidSlots) && you.shopPaidSlots.includes(i);
             const price = shopMode
-              ? (paid ? " · PAID" : ` · ${def.kind === "reroll" ? rerollCost : C.CardDrawCost}c`)
+              ? (def.kind !== "reroll" && snap.modes.roguelikeRerollRefresh
+                ? " · FREE"
+                : paid ? " · PAID"
+                : ` · ${def.kind === "reroll" ? rerollCost : C.CardDrawCost}c`)
               : "";
             useBtn.innerHTML = `<span class="cardEmoji">${def.emoji}</span><span class="cardLabel">${i + 1}. ${def.name}${price}</span>`;
             useBtn.disabled = !usable(i);
@@ -1406,7 +1411,7 @@ const Render = (() => {
           ? (!you.alive
             ? "Shop unavailable"
             : snap.modes.roguelikeRerollRefresh
-              ? "Use 1–3 · empty choices stay empty · refresh all with 4"
+              ? "Use 1–3 for free · empty choices stay empty · reroll with 4"
               : "Pick 1–3 · reroll with 4")
           : !you.alive ? "Auto-buy paused"
           : !hasRoom ? "Hand full"
@@ -1479,7 +1484,9 @@ const Render = (() => {
         return shopMode && you.alive && you.coins >= cost;
       }
       const paid = Array.isArray(you.shopPaidSlots) && you.shopPaidSlots.includes(slot);
-      if (shopMode && you.alive && !paid && you.coins < C.CardDrawCost) return false;
+      const freeChoice = shopMode && snap.modes.roguelikeRerollRefresh;
+      if (shopMode && you.alive && !freeChoice && !paid &&
+          you.coins < C.CardDrawCost) return false;
       if (snap.modes && snap.modes.publicSeconds && kind === "magnify") return false;
       // Eliminated players only ever hold their per-round ghost item — one
       // of the global-effect cards — and can fire it like anyone's card.
