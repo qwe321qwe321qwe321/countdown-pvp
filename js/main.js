@@ -134,7 +134,9 @@
           Math.hypot(predDeadAim.x - auth.x, predDeadAim.y - auth.y) > CONFIG.DeadWeaponAimSpeed) {
         predDeadAim = auth;
       }
-      if (st.deadFire) {
+      // Keep predicting the slowed aim through the release frame while the
+      // latest host snapshot still says the shot is charged/held.
+      if (st.deadFire || you.deadWeaponCharging) {
         const dt = Math.min(dtMs, 100) / 1000;
         const dx = mouse.x - predDeadAim.x, dy = mouse.y - predDeadAim.y;
         const len = Math.hypot(dx, dy);
@@ -205,7 +207,7 @@
   });
 
   // Once eliminated, primary mouse becomes a held input rather than a click:
-  // one uninterrupted second charges the permanent -5 interference gun.
+  // charge the permanent -5 interference gun, then release to fire it.
   canvas.addEventListener("pointerdown", e => {
     const you = latestSnap && latestSnap.you;
     if (e.button !== 0 || !you || !you.deadWeapon || latestSnap.phase !== "playing") return;

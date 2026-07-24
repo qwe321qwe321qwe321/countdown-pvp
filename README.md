@@ -23,7 +23,7 @@ host lobby and play solo for testing.
 | Input | Effect |
 | --- | --- |
 | Mouse | Holding the bomb: drag your arms — the bomb follows, clamped to `BombArmReach` (dodge minus-time shots, catch repair shots, hide the bomb behind your body). Not holding: aim your next projectile card. |
-| Hold left mouse after elimination | Charge for 1 second and fire the permanent Ghost Gun's -5 projectile. Aim is heavily slowed while held; each shot has a 2-second cooldown. |
+| Hold/release left mouse after elimination | Hold for 2 seconds to charge the permanent Ghost Gun, then release at 100% to fire its -5 projectile. Aim is heavily slowed while held; there is no post-shot cooldown. |
 | Space | Pass the bomb to the next alive player in seat order (once `PASS LOCK` reaches 0) |
 | 1 / 2 / 3 (or click) | Use the card in that hand slot |
 | R (or Draw button) | Draw a random card for `CardDrawCost` coins, up to `MaxHandSize` |
@@ -83,10 +83,10 @@ decide hits, bomb time changes, deaths, or card draws.
   full; all cards single-use, consumed even on a miss.
 - **Elimination**: the only death is holding the bomb at 0. Dead players lose coins and
   cards, but permanently gain a charge-to-fire Ghost Gun for the rest of the match. Its
-  normal projectile can still disrupt the bomb for -5 seconds, while a one-second charge,
-  heavily slowed held aim and a two-second post-shot cooldown limit its pressure. Since dead
-  players can affect play, they no longer receive hidden bomb timers. Last survivor wins;
-  host can rematch (full reset, everyone back in their original seats).
+  normal projectile can still disrupt the bomb for -5 seconds, while a two-second charge
+  and heavily slowed held aim limit its pressure. Eliminated players always see the exact
+  timers on the real bomb and every fake bomb. Last survivor wins; host can rematch (full
+  reset, everyone back in their original seats).
 - **Debug UI** (checkbox, dev only): exact bomb time, speed/shield/curse state, pass lock,
   passing order, every player's coins/hand, projectile states — never part of normal UI.
 

@@ -92,8 +92,7 @@ const CONFIG = {
   AimLineLength: 520,                     // how far a wielded weapon's sight line reaches
 
   // ---- Eliminated-player interference weapon ----
-  DeadWeaponChargeTime: 1.0,              // hold primary fire this long to launch one shot
-  DeadWeaponCooldown: 2.0,                // cooldown begins after the shot; charging cannot overlap it
+  DeadWeaponChargeTime: 2.0,              // hold this long, then release to launch one shot
   DeadWeaponAmount: -5,                   // seconds removed when the projectile touches a bomb
   DeadWeaponAimSpeed: 150,                // world units/sec while primary fire is held (deliberately sluggish)
 

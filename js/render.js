@@ -95,9 +95,9 @@ const Render = (() => {
       // see — and since both their hands are busy, they can't be the bomb
       // holder at the same time.
       if (p.alive && p.equipped) drawWeaponPose(ctx, p, cx, cy, snap);
-      // Eliminated players keep a permanent ghost gun. Its direction,
-      // charge-up and cooldown are public so the living players can read and
-      // react to the incoming interference rather than being blindsided.
+      // Eliminated players keep a permanent ghost gun. Its direction and
+      // charge-up are public so living players can read and react to the
+      // incoming interference rather than being blindsided.
       if (!p.alive && p.deadWeapon) drawDeadWeaponPose(ctx, p, cx, cy);
 
       // Everyone can see *that* a player is using a Magnifying Glass, and
@@ -355,7 +355,7 @@ const Render = (() => {
       : "rgba(150,120,170,0.45)";
     ctx.fill();
 
-    // Sluggish public sight line; brighter as the one-second charge fills.
+    // Sluggish public sight line; brighter as the charge fills.
     ctx.setLineDash([7, 10]);
     ctx.lineWidth = 1.5 + p.deadWeaponCharge * 1.5;
     ctx.strokeStyle = p.deadWeaponCharging
@@ -366,14 +366,12 @@ const Render = (() => {
     ctx.lineTo(hx + dx * C.AimLineLength, hy + dy * C.AimLineLength);
     ctx.stroke();
 
-    // Cooldown arc empties clockwise; the charge arc fills clockwise.
+    // Charge arc fills clockwise.
     const ringX = p.x, ringY = p.y;
-    const progress = p.deadWeaponCooldown > 0
-      ? 1 - Math.min(1, p.deadWeaponCooldown / C.DeadWeaponCooldown)
-      : p.deadWeaponCharge;
+    const progress = p.deadWeaponCharge;
     ctx.setLineDash([]);
     ctx.lineWidth = 3;
-    ctx.strokeStyle = p.deadWeaponCooldown > 0 ? "#7b6b86" : "#d58cff";
+    ctx.strokeStyle = "#d58cff";
     ctx.beginPath();
     ctx.arc(ringX, ringY, C.PlayerBodyRadius + 6, -Math.PI / 2,
       -Math.PI / 2 + Math.PI * 2 * progress);
@@ -700,17 +698,15 @@ const Render = (() => {
       }
     } else if (snap.you && snap.you.deadWeapon && snap.phase === "playing") {
       ctx.font = "bold 20px sans-serif";
-      if (snap.you.deadWeaponCooldown > 0) {
-        ctx.fillStyle = "#a99bb3";
-        ctx.fillText(`GHOST GUN COOLDOWN: ${snap.you.deadWeaponCooldown.toFixed(1)}s`,
-          cx, C.WorldHeight - 24);
-      } else if (snap.you.deadWeaponCharging) {
+      if (snap.you.deadWeaponCharging) {
         ctx.fillStyle = "#dca0ff";
-        ctx.fillText(`CHARGING GHOST SHOT: ${Math.round(snap.you.deadWeaponCharge * 100)}%`,
-          cx, C.WorldHeight - 24);
+        ctx.fillText(snap.you.deadWeaponCharge >= 1
+          ? "GHOST SHOT CHARGED — RELEASE LEFT MOUSE TO FIRE"
+          : `CHARGING GHOST SHOT: ${Math.round(snap.you.deadWeaponCharge * 100)}%`,
+        cx, C.WorldHeight - 24);
       } else {
         ctx.fillStyle = "#dca0ff";
-        ctx.fillText("HOLD LEFT MOUSE 1s — FIRE -5 GHOST SHOT", cx, C.WorldHeight - 24);
+        ctx.fillText("HOLD LEFT MOUSE TO CHARGE — RELEASE AT 100% TO FIRE", cx, C.WorldHeight - 24);
       }
     } else if (snap.you && !snap.you.alive && snap.phase !== "matchover") {
       ctx.font = "bold 20px sans-serif";
@@ -795,7 +791,7 @@ const Render = (() => {
       const deadWeaponActive = !!(you && you.deadWeapon && snap.phase === "playing");
       dom.aimHint.style.display = (hooks.armedSlot != null || deadWeaponActive) ? "block" : "none";
       dom.aimHint.textContent = deadWeaponActive
-        ? "👻 GHOST GUN — hold left mouse 1s to fire -5; aim is heavily slowed while held; 2s cooldown"
+        ? "👻 GHOST GUN — hold left mouse for 2s, then release at 100% to fire -5; no cooldown"
         : "🎯 AIMING — click the table to fire, right-click/Esc to cancel";
     }
 

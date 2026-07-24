@@ -27,13 +27,14 @@ const AI = (() => {
     };
     if (!player.alive) {
       // Dead bots use the same permanent interference weapon as humans. They
-      // keep holding to auto-cycle charge -> cooldown -> charge, while the
-      // host applies the same sluggish aim tracking and projectile rules.
+      // hold until fully charged, release for one tick to fire, then repeat
+      // immediately. The host applies the same sluggish aim tracking and
+      // projectile rules as it does for humans.
       if (sim.phase === "playing" && sim.bomb) {
         const bombPos = Sim.bombWorldPos(sim);
         inp.mx = bombPos.x;
         inp.my = bombPos.y;
-        inp.deadFire = true;
+        inp.deadFire = player.deadWeaponCharge + 1e-9 < C.DeadWeaponChargeTime;
       }
       return inp;
     }
