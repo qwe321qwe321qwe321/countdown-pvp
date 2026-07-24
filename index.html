@@ -62,9 +62,31 @@
   #debugPanel { display: none; font-size: 11px; font-family: monospace; white-space: pre; background: #0c0d10; border: 1px solid #4d566a; border-radius: 6px; padding: 8px; max-height: 280px; overflow: auto; }
   #matchOverBar { display: none; gap: 10px; align-items: center; margin-top: 8px; }
   #help { max-width: 960px; font-size: 12px; color: #9aa4b2; line-height: 1.6; }
+  #audioControls {
+    position: fixed; top: 10px; right: 10px; z-index: 20;
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px; border: 1px solid #3a4150; border-radius: 8px;
+    background: rgba(20, 22, 26, 0.92); box-shadow: 0 5px 18px rgba(0,0,0,.28);
+    backdrop-filter: blur(6px);
+  }
+  #audioControls button { padding: 5px 8px; min-width: 70px; color: #8f9aaa; }
+  #audioControls button.active { color: #e8e8e8; border-color: #5a95e6; }
+  #audioControls label { display: flex; align-items: center; gap: 5px; font-size: 10px; color: #9aa4b2; }
+  #audioVolume { width: 72px; accent-color: #5a95e6; cursor: pointer; }
+  @media (max-width: 700px) {
+    #audioControls { position: static; width: fit-content; margin: 8px 8px 0 auto; }
+    #audioControls button { min-width: 62px; }
+  }
 </style>
 </head>
 <body>
+<div id="audioControls" aria-label="Audio controls">
+  <button id="btnMusic" type="button" aria-pressed="true">♫ BGM</button>
+  <button id="btnSfx" type="button" aria-pressed="true">🔊 SFX</button>
+  <label title="Master volume">VOL
+    <input id="audioVolume" type="range" min="0" max="100" value="72" aria-label="Master volume">
+  </label>
+</div>
 <div id="app">
 
   <div id="screen-menu" class="screen active">
@@ -197,14 +219,15 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <!-- ?v= cache-buster: bump it whenever the game scripts change, so nobody
      plays a stale mix of old and new code out of the browser cache. -->
-<script src="js/config.js?v=10"></script>
-<script src="js/cards.js?v=10"></script>
-<script src="js/sim.js?v=10"></script>
-<script src="js/ai.js?v=10"></script>
-<script src="js/net.js?v=10"></script>
-<script src="js/host.js?v=10"></script>
-<script src="js/client.js?v=10"></script>
-<script src="js/render.js?v=10"></script>
-<script src="js/main.js?v=10"></script>
+<script src="js/config.js?v=11"></script>
+<script src="js/cards.js?v=11"></script>
+<script src="js/sim.js?v=11"></script>
+<script src="js/ai.js?v=11"></script>
+<script src="js/net.js?v=11"></script>
+<script src="js/host.js?v=11"></script>
+<script src="js/client.js?v=11"></script>
+<script src="js/render.js?v=11"></script>
+<script src="js/audio.js?v=11"></script>
+<script src="js/main.js?v=11"></script>
 </body>
 </html>

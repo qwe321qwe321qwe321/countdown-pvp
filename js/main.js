@@ -12,6 +12,7 @@
   document.querySelectorAll(".screen").forEach(el => { screens[el.id] = el; });
   function show(id) {
     for (const k in screens) screens[k].classList.toggle("active", k === "screen-" + id);
+    GameAudio.setScene(id);
   }
 
   // ---- Input collector ----
@@ -449,6 +450,7 @@
       const predictedSnap = role === "client" ? applyLocalPrediction(latestSnap, dtMs) : latestSnap;
       const viewSnap = withLocalParry(predictedSnap, nowMs);
 
+      GameAudio.sync(viewSnap);
       const hoverPt = collector.peek();
       Render.draw(ctx, viewSnap, myId, hoverPt.mx != null ? { x: hoverPt.mx, y: hoverPt.my } : null);
       Render.updateDom(dom, viewSnap, {
@@ -464,6 +466,7 @@
 
   function enterGame() {
     Render.resetDomCache();
+    GameAudio.reset();
     dom.eventLog.innerHTML = "";
     predOffset = null;
     predHolder = false;
