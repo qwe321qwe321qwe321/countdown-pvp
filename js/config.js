@@ -59,7 +59,7 @@ const CONFIG = {
 
   // ---- Cards ----
   CardDrawCost: 5,
-  ShopRerollCost: 5,
+  ShopRerollCost: 2,
   RoguelikeChoiceCount: 3,
   MaxHandSize: 5,
   StartingHand: ["magnify"],              // the opening round's attack card is added after its pool is rolled
