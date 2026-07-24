@@ -11,11 +11,15 @@ const Sim = (() => {
   const CENTER = { x: C.WorldWidth / 2, y: C.WorldHeight / 2 };
 
   // Coin economy rates in CONFIG are tuned for a 3-player match. Scale the
-  // *Interval fields by seat count so per-player income drops proportionally
-  // as more players join — total coin generation across the table stays
-  // roughly flat instead of growing with every extra seat.
+  // *Interval fields by the *living* headcount so per-player income drops
+  // proportionally as more players are alive — total coin generation across
+  // the table stays roughly flat instead of growing with every extra body.
+  // Crucially this tracks the *current* alive count, not the fixed seat count:
+  // as players die and fewer remain, the interval shrinks and everyone's
+  // natural income speeds up, so a thinning table earns faster and faster.
   function coinIntervalScale(sim) {
-    return sim.seatCount / C.CoinEconomyBaselinePlayers;
+    const alive = sim.players.reduce((n, p) => n + (p.alive ? 1 : 0), 0);
+    return Math.max(1, alive) / C.CoinEconomyBaselinePlayers;
   }
 
   // ---- Geometry helpers ----------------------------------------------------
@@ -142,16 +146,34 @@ const Sim = (() => {
     return seats;
   }
 
-  function createMatch(roster, bombTimePool) {
+  // Random team assignment, as even as possible: round-robin team indices
+  // dealt out, then shuffled so join/seat order never predicts a team.
+  // teamCount <= 1 means no teams (every player gets team 0, and callers
+  // treat sim.teamCount <= 1 as free-for-all).
+  function assignTeams(n, teamCount) {
+    const tc = Math.max(1, teamCount || 1);
+    const teams = Array.from({ length: n }, (_, i) => i % tc);
+    for (let i = teams.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [teams[i], teams[j]] = [teams[j], teams[i]];
+    }
+    return teams;
+  }
+
+  function createMatch(roster, bombTimePool, teamCount) {
     const seats = shuffledSeats(roster.length);
+    const tc = Math.max(1, Math.min(teamCount || 1, roster.length));
+    const teams = assignTeams(roster.length, tc);
     const sim = {
       seatCount: roster.length,
+      teamCount: tc,
       bombTimePool: bombTimePool.slice(),
       players: roster.map((r, i) => ({
         id: r.id,
         name: r.name,
         isBot: !!r.isBot,
         seat: seats[i],
+        team: teams[i],
         disconnected: false,
         alive: true,
         coins: C.StartingCoins,
@@ -193,6 +215,7 @@ const Sim = (() => {
       explosionVictimId: null,
       explosionMidAir: false,   // detonated while flying between seats -> render the staged blast sequence
       winnerId: null,
+      winningTeam: null,        // set instead of winnerId when teamCount > 1
       time: 0,
     };
     spawnBomb(sim);
@@ -251,6 +274,12 @@ const Sim = (() => {
   // Full match reset (rematch): everyone back to their original seat, coins
   // and hands wiped, alive again. Disconnected players stay out.
   function resetMatch(sim) {
+    // A rematch is a fresh match: re-roll team assignments same as the
+    // original createMatch, so the same lobby can produce a different split.
+    if (sim.teamCount > 1) {
+      const teams = assignTeams(sim.players.length, sim.teamCount);
+      sim.players.forEach((p, i) => { p.team = teams[i]; });
+    }
     for (const p of sim.players) {
       p.alive = !p.disconnected;
       p.coins = C.StartingCoins;
@@ -266,6 +295,11 @@ const Sim = (() => {
       p.lastPayoutSeq = 0;
     }
     sim.winnerId = null;
+    sim.winningTeam = null;
+    // Back to a clean opening: reveal phase, bomb travelling in from center.
+    // Works whether the rematch was fired at match-over or mid-round.
+    sim.phase = "reveal";
+    sim.phaseTimer = C.InitialTimeRevealDuration;
     spawnBomb(sim);
   }
 
@@ -385,6 +419,17 @@ const Sim = (() => {
   function checkWin(sim) {
     if (sim.phase === "matchover") return;
     const alive = sim.players.filter(p => p.alive);
+    if (sim.teamCount > 1) {
+      // Team battle: match ends the instant only one team still has a
+      // living member — that team wins even if several of them survive.
+      const aliveTeams = new Set(alive.map(p => p.team));
+      if (aliveTeams.size <= 1) {
+        sim.phase = "matchover";
+        sim.winningTeam = aliveTeams.size ? [...aliveTeams][0] : null;
+        addEvent(sim, aliveTeams.size ? `TEAM ${sim.winningTeam + 1} WINS THE MATCH!` : "Nobody survived");
+      }
+      return;
+    }
     if (alive.length <= 1) {
       sim.phase = "matchover";
       sim.winnerId = alive.length ? alive[0].id : null;
@@ -1118,9 +1163,18 @@ const Sim = (() => {
       phaseTimer: sim.phaseTimer,
       time: sim.time,
       seatCount: sim.seatCount,
+      teamCount: sim.teamCount,
       winnerId: sim.winnerId,
-      winnerName: sim.winnerId ? getPlayer(sim, sim.winnerId).name : null,
+      winningTeam: sim.winningTeam,
+      winnerName: sim.teamCount > 1
+        ? (sim.winningTeam != null ? `Team ${sim.winningTeam + 1}` : null)
+        : (sim.winnerId ? getPlayer(sim, sim.winnerId).name : null),
       aliveCount: sim.players.filter(p => p.alive).length,
+      // Per-team living headcount, so the HUD can show team standings instead
+      // of a single alive/total figure once teams are in play.
+      teamAliveCounts: sim.teamCount > 1
+        ? Array.from({ length: sim.teamCount }, (_, t) => sim.players.filter(p => p.team === t && p.alive).length)
+        : null,
       explosionAt: sim.phase === "exploding" ? sim.explosionAt : null,
       explosionVictimPos: sim.phase === "exploding" ? sim.explosionVictimPos : null,
       explosionVictimId: sim.phase === "exploding" ? sim.explosionVictimId : null,
@@ -1187,7 +1241,7 @@ const Sim = (() => {
         // trickle can't be used to tell a decoy from the real bomb.
         const isHolderNow = !!(b && b.holderId === p.id) || sim.fakeBombs.some(f => f.holderId === p.id);
         return {
-          id: p.id, name: p.name, seat: p.seat, x: seat.x, y: seat.y, alive: p.alive,
+          id: p.id, name: p.name, seat: p.seat, team: p.team, x: seat.x, y: seat.y, alive: p.alive,
           equipped,                          // wielding a throwable/gun card — visible to everyone
           // Aim direction is public whenever a weapon or the magnifying glass
           // box-cast is out — everyone can see *where* it's pointed, never
@@ -1268,6 +1322,8 @@ const Sim = (() => {
     }
     return {
       phase: sim.phase,
+      teamCount: sim.teamCount,
+      winningTeam: sim.winningTeam,
       bombRemaining: b ? b.remaining : null,
       bombInitial: b ? b.initialTime : null,
       holder: holder ? holder.name : null,
@@ -1292,6 +1348,7 @@ const Sim = (() => {
       })),
       players: sim.players.map(p => ({
         name: p.name,
+        team: p.team,
         state: p.disconnected ? "disconnected" : (p.alive ? "alive" : "spectator"),
         coins: p.coins,
         hand: p.hand.map(id => id ? Cards.TYPES[id].name : "-"),

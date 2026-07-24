@@ -33,9 +33,11 @@ const CONFIG = {
 
   // ---- Coin economy (integers only) ----
   // The rates below (interval/amount) are tuned for a 3-player match. Per-
-  // player income is scaled down proportionally as the seat count rises
-  // above that baseline, so total coin generation across the table stays
-  // roughly constant instead of climbing with every extra player — see
+  // player income is scaled down proportionally as the number of *living*
+  // players rises above that baseline, so total coin generation across the
+  // table stays roughly constant instead of climbing with every extra player.
+  // Because it tracks the current alive count (not the fixed seat count), the
+  // rate speeds up as players die and the table thins — see
   // Sim.coinIntervalScale(sim), applied to the *Interval fields at use time.
   CoinEconomyBaselinePlayers: 3,
   StartingCoins: 0,
@@ -67,7 +69,7 @@ const CONFIG = {
     slowdown: 6,
     shield: 0,
     curse: 0,
-    grapple: 6,
+    grapple: 8,
     reinforced: 6,
     fakebomb: 3,
   },
@@ -90,7 +92,7 @@ const CONFIG = {
   AimLineLength: 520,                     // how far a wielded weapon's sight line reaches
 
   // ---- Grapple Claw ----
-  GrappleFireSpeed: 2200,                 // fast outbound throw
+  GrappleFireSpeed: 3200,                 // fast outbound throw
   GrappleRetractSpeed: 260,               // normal-speed reel-in once it latches (same order as BombArmMoveSpeed)
 
   // ---- Reinforced Arm ----
@@ -117,6 +119,10 @@ const CONFIG = {
   // ---- Bots ----
   BotAimDuration: 0.35,                   // seconds a bot must hold its weapon raised & aimed before it actually fires
   BotAimJitter: 0.35,                     // extra random 0..this seconds added on top, so bots don't all fire in lockstep
+
+  // ---- Teams ----
+  TeamCountOptions: [1, 2, 3, 4],          // 1 = no teams (free-for-all)
+  DefaultTeamCount: 1,
 
   // ---- Session ----
   MaxPlayers: 8,

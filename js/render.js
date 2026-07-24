@@ -6,6 +6,17 @@
 const Render = (() => {
   const C = CONFIG;
   const SEAT_COLORS = ["#e6604c", "#4c9be6", "#5cc46a", "#e6c14c", "#b06ce6", "#e68b4c", "#4ce6d4", "#e64ca8"];
+  // Team battle: color by team instead of by seat, so teammates read as one
+  // side at a glance. Capped at CONFIG.TeamCountOptions' max (4).
+  const TEAM_COLORS = ["#e6604c", "#4c9be6", "#5cc46a", "#e6c14c"];
+
+  // Every player's identity color: team color when teams are in play
+  // (snap.teamCount > 1), otherwise the per-seat color as before.
+  function colorFor(p, snap) {
+    return snap.teamCount > 1
+      ? TEAM_COLORS[p.team % TEAM_COLORS.length]
+      : SEAT_COLORS[p.seat % SEAT_COLORS.length];
+  }
   const FLOAT_LIFETIME = 1.6; // seconds a positioned event floats on screen
   const PAYOUT_FLOAT_LIFETIME = 1.3; // seconds the private "+N" cash-in cue floats
 
@@ -49,7 +60,7 @@ const Render = (() => {
 
     // Players (fixed seats, never move).
     for (const p of snap.players) {
-      const col = SEAT_COLORS[p.seat % SEAT_COLORS.length];
+      const col = colorFor(p, snap);
       const aliveLook = p.alive || p.id === pendingVictimId;
       ctx.beginPath();
       ctx.arc(p.x, p.y, C.PlayerBodyRadius, 0, Math.PI * 2);
@@ -77,12 +88,13 @@ const Render = (() => {
       ctx.textAlign = "center";
       ctx.fillStyle = aliveLook ? "#e8e8e8" : "#767e8a";
       const tag = p.id === myId ? " (you)" : "";
-      ctx.fillText(p.name + tag, p.x, p.y - C.PlayerBodyRadius - 10);
+      const teamTag = snap.teamCount > 1 ? ` [T${p.team + 1}]` : "";
+      ctx.fillText(p.name + tag + teamTag, p.x, p.y - C.PlayerBodyRadius - 10);
 
       // A player aiming a projectile card holds it visibly for everyone to
       // see — and since both their hands are busy, they can't be the bomb
       // holder at the same time.
-      if (p.alive && p.equipped) drawWeaponPose(ctx, p, cx, cy);
+      if (p.alive && p.equipped) drawWeaponPose(ctx, p, cx, cy, snap);
 
       // Everyone can see *that* a player is using a Magnifying Glass, and
       // where its box-cast is pointed — just never the reading it gives them.
@@ -116,7 +128,7 @@ const Render = (() => {
     // real one — on screen there is simply no way to tell them apart.
     for (const f of snap.fakeBombs) {
       const fHolder = f.holderId ? snap.players.find(p => p.id === f.holderId) : null;
-      if (fHolder && fHolder.alive && !f.transferring) drawArms(ctx, fHolder, f, fHolder.armBuffed);
+      if (fHolder && fHolder.alive && !f.transferring) drawArms(ctx, fHolder, f, fHolder.armBuffed, snap);
       if (f.claw) drawClawTether(ctx, f.clawX, f.clawY, f.x, f.y);
       drawBombBody(ctx, f.x, f.y, snap.time);
       // Creator-only peek at the decoy's timer (only ever present in the
@@ -135,7 +147,7 @@ const Render = (() => {
     // Arms: body -> hands -> bomb, only for the current holder, and only
     // while the bomb isn't mid-flight between seats (nobody's arms are on it).
     if (snap.bomb && !snap.bomb.transferring && holder && holder.alive) {
-      drawArms(ctx, holder, snap.bomb, holder.armBuffed);
+      drawArms(ctx, holder, snap.bomb, holder.armBuffed, snap);
     }
 
     // Bomb (with cable + gripping claw while a grapple is reeling it in).
@@ -236,13 +248,13 @@ const Render = (() => {
     return `rgb(${mix(base.r, tint.r)},${mix(base.g, tint.g)},${mix(base.b, tint.b)})`;
   }
 
-  function drawArms(ctx, holder, bomb, buffed) {
+  function drawArms(ctx, holder, bomb, buffed, snap) {
     let dx = bomb.x - holder.x, dy = bomb.y - holder.y;
     const len = Math.hypot(dx, dy);
     if (len < 0.001) { dx = 0; dy = -1; } else { dx /= len; dy /= len; }
     const px = -dy, py = dx; // perpendicular
     // Reinforced Arm: tint the arms silver/metallic while the buff is active.
-    const col = buffed ? "#c9d2dc" : SEAT_COLORS[holder.seat % SEAT_COLORS.length];
+    const col = buffed ? "#c9d2dc" : colorFor(holder, snap);
     ctx.lineWidth = 7;
     ctx.lineCap = "round";
     ctx.strokeStyle = col;
@@ -265,7 +277,7 @@ const Render = (() => {
   // Public pose for a player who has a projectile card armed: a single raised
   // arm pointing toward their aim, tipped with a small weapon marker. Purely
   // cosmetic — the actual shot only fires once they click.
-  function drawWeaponPose(ctx, p, cx, cy) {
+  function drawWeaponPose(ctx, p, cx, cy, snap) {
     let dx, dy;
     if (p.aimX != null) {
       dx = p.aimX - p.x; dy = p.aimY - p.y;
@@ -274,7 +286,7 @@ const Render = (() => {
     }
     const len = Math.hypot(dx, dy) || 1;
     dx /= len; dy /= len;
-    const col = SEAT_COLORS[p.seat % SEAT_COLORS.length];
+    const col = colorFor(p, snap);
     const hx = p.x + dx * (C.PlayerBodyRadius + 18);
     const hy = p.y + dy * (C.PlayerBodyRadius + 18);
     ctx.lineWidth = 6;
@@ -637,7 +649,9 @@ const Render = (() => {
 
     if (you) {
       const me = snap.players.find(p => p.id === you.id);
-      const coinScale = snap.seatCount / C.CoinEconomyBaselinePlayers;
+      // Mirrors Sim.coinIntervalScale: scale by the *current* alive count, not
+      // the fixed seat count, so the shown rate speeds up as players die.
+      const coinScale = Math.max(1, snap.aliveCount) / C.CoinEconomyBaselinePlayers;
       const baseRate = C.PassiveCoinAmount / (C.PassiveCoinInterval * coinScale);
       // Farming the bomb replaces passive income, it doesn't stack on top —
       // matches Sim.step's coin logic. The pot itself grows (shown on the
@@ -649,7 +663,10 @@ const Render = (() => {
       const rateText = `(+${Number.isInteger(rate) ? rate : rate.toFixed(1)}/s)`;
       dom.coinDisplay.innerHTML = `<span class="coin-icon">💰</span>${you.coins}` +
         ` <span style="font-size:14px;color:${rateColor}">${rateText}</span>`;
-      dom.statusLine.textContent = `Alive: ${snap.aliveCount}/${snap.players.length}` +
+      const aliveText = snap.teamAliveCounts
+        ? snap.teamAliveCounts.map((n, i) => `Team ${i + 1}: ${n}`).join("   ·   ")
+        : `Alive: ${snap.aliveCount}/${snap.players.length}`;
+      dom.statusLine.textContent = aliveText +
         (snap.bomb ? `   ·   Bomb started at ${snap.bomb.initialTime}s` : "");
     } else {
       dom.coinDisplay.textContent = "";
@@ -732,10 +749,14 @@ const Render = (() => {
       dom.debugPanel.style.display = "none";
     }
 
-    // Match over bar.
-    if (snap.phase === "matchover") {
+    // Host controls / match-over bar. The host gets Rematch + Back to Lobby in
+    // any phase; the win banner only shows once the match is actually over.
+    const isOver = snap.phase === "matchover";
+    if (isOver || hooks.isHost) {
       dom.matchOverBar.style.display = "flex";
-      dom.matchOverText.textContent = snap.winnerName ? `${snap.winnerName} wins!` : "Match over";
+      dom.matchOverText.textContent = isOver
+        ? (snap.winnerName ? `${snap.winnerName} wins!` : "Match over")
+        : "";
       dom.btnRematch.style.display = hooks.isHost ? "inline-block" : "none";
       if (dom.btnToLobby) dom.btnToLobby.style.display = hooks.isHost ? "inline-block" : "none";
     } else {
@@ -769,7 +790,8 @@ const Render = (() => {
 
   function formatDebug(d, isHost) {
     const lines = [];
-    lines.push(`[DEBUG] authority=${isHost ? "host (this machine)" : "host (remote)"}  phase=${d.phase}`);
+    lines.push(`[DEBUG] authority=${isHost ? "host (this machine)" : "host (remote)"}  phase=${d.phase}` +
+      (d.teamCount > 1 ? `  teamCount=${d.teamCount} winningTeam=${d.winningTeam != null ? d.winningTeam + 1 : "-"}` : ""));
     lines.push(`bomb: remaining=${fmt(d.bombRemaining)} initial=${fmt(d.bombInitial)} holder=${d.holder ?? "-"}`);
     lines.push(`  pos=${d.bombPos ? d.bombPos.x + "," + d.bombPos.y : "-"} armOffset=${d.armOffset ? d.armOffset.x + "," + d.armOffset.y : "-"}`);
     lines.push(`  speed=x${fmt(d.speedMult)} (${fmt(d.speedRemaining)}s left)  shield=${d.shieldActive} (${fmt(d.shieldRemaining)}s)  curse=${d.curseActive}`);
@@ -778,7 +800,8 @@ const Render = (() => {
     lines.push(`projectiles: ${d.projectiles.length ? d.projectiles.map(p => `${p.amount > 0 ? "+" : ""}${p.amount}s@${p.x},${p.y}`).join("  ") : "none"}`);
     lines.push(`fakes: ${d.fakeBombs && d.fakeBombs.length ? d.fakeBombs.map(f => `${f.holder}${f.to ? "→" + f.to : ""} ${f.remaining.toFixed(1)}s`).join("  ") : "none"}`);
     for (const p of d.players) {
-      lines.push(`  ${p.name.padEnd(10)} ${p.state.padEnd(12)} coins=${String(p.coins).padEnd(4)} hand=[${p.hand.join(", ")}]`);
+      const teamTag = d.teamCount > 1 ? `T${p.team + 1} ` : "";
+      lines.push(`  ${teamTag}${p.name.padEnd(10)} ${p.state.padEnd(12)} coins=${String(p.coins).padEnd(4)} hand=[${p.hand.join(", ")}]`);
     }
     return lines.join("\n");
   }

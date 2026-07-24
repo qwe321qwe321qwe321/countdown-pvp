@@ -356,7 +356,21 @@
     });
     renderSeats($("hostSeatList"), [{ id: "P0", name: playerName(), isBot: false }]);
     buildPoolChecks();
+    buildTeamCountSelect();
   };
+
+  function buildTeamCountSelect() {
+    const sel = $("teamCountSelect");
+    sel.innerHTML = "";
+    for (const n of CONFIG.TeamCountOptions) {
+      const opt = document.createElement("option");
+      opt.value = String(n);
+      opt.textContent = n <= 1 ? "Free-for-all" : `${n} Teams`;
+      if (n === CONFIG.DefaultTeamCount) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.onchange = () => hostSession.setTeamCount(Number(sel.value));
+  }
 
   function buildPoolChecks() {
     const wrap = $("poolChecks");
@@ -422,7 +436,10 @@
       collector,
       onWelcome: id => { myId = id; show("client-lobby"); },
       onReject: reason => { $("joinStatus").textContent = "Rejected: " + reason; },
-      onLobby: roster => renderSeats($("clientSeatList"), roster),
+      onLobby: (roster, pool, teamCount) => {
+        renderSeats($("clientSeatList"), roster);
+        $("clientTeamInfo").textContent = teamCount > 1 ? `Team Mode: ${teamCount} Teams` : "Free-for-all";
+      },
       onStart: enterGame,
       onReturnToLobby: () => show("client-lobby"),
       onSnapshot: snap => { latestSnap = snap; },

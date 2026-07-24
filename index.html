@@ -94,6 +94,13 @@
       <h2>Bomb Time Pool</h2>
       <div class="row" id="poolChecks"></div>
     </div>
+    <div class="panel">
+      <h2>Team Mode</h2>
+      <div class="row">
+        <label for="teamCountSelect">Teams:</label>
+        <select id="teamCountSelect"></select>
+      </div>
+    </div>
     <div class="panel row" style="justify-content:center">
       <button class="primary" id="btnStartMatch">Start Match</button>
     </div>
@@ -112,6 +119,7 @@
     <div class="panel">
       <h2>Waiting for host to start…</h2>
       <div class="seat-list" id="clientSeatList"></div>
+      <div id="clientTeamInfo" style="margin-top:8px; font-size:13px; color:#9aa1ad"></div>
     </div>
   </div>
 
@@ -170,14 +178,14 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <!-- ?v= cache-buster: bump it whenever the game scripts change, so nobody
      plays a stale mix of old and new code out of the browser cache. -->
-<script src="js/config.js?v=4"></script>
-<script src="js/cards.js?v=4"></script>
-<script src="js/sim.js?v=4"></script>
-<script src="js/ai.js?v=4"></script>
-<script src="js/net.js?v=4"></script>
-<script src="js/host.js?v=4"></script>
-<script src="js/client.js?v=4"></script>
-<script src="js/render.js?v=4"></script>
-<script src="js/main.js?v=4"></script>
+<script src="js/config.js?v=5"></script>
+<script src="js/cards.js?v=5"></script>
+<script src="js/sim.js?v=5"></script>
+<script src="js/ai.js?v=5"></script>
+<script src="js/net.js?v=5"></script>
+<script src="js/host.js?v=5"></script>
+<script src="js/client.js?v=5"></script>
+<script src="js/render.js?v=5"></script>
+<script src="js/main.js?v=5"></script>
 </body>
 </html>

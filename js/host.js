@@ -11,7 +11,7 @@ const Host = (() => {
   //   hostName,
   //   localCollector,          // input collector for the host's own player
   //   onReady(code), onError(err),
-  //   onLobby(roster, pool),   // fired on any lobby change
+  //   onLobby(roster, pool, teamCount),   // fired on any lobby change
   //   onSnapshot(snap),        // host's own per-frame view
   // }
   function createSession(opts) {
@@ -19,6 +19,7 @@ const Host = (() => {
     let nextClientNum = 1;
     let nextBotNum = 1;
     let pool = C.DefaultBombTimePool.slice();
+    let teamCount = C.DefaultTeamCount;
     let started = false;
     let sim = null;
     let tickTimer = null;
@@ -55,8 +56,8 @@ const Host = (() => {
     }
 
     function lobbyChanged() {
-      opts.onLobby(rosterView(), pool);
-      net.broadcast({ type: "lobby", roster: rosterView(), pool });
+      opts.onLobby(rosterView(), pool, teamCount);
+      net.broadcast({ type: "lobby", roster: rosterView(), pool, teamCount });
     }
 
     function handleMessage(peerId, msg) {
@@ -113,6 +114,13 @@ const Host = (() => {
       lobbyChanged();
     }
 
+    function setTeamCount(n) {
+      if (started) return;
+      const clamped = Math.max(1, Math.min(C.MaxPlayers, Math.round(Number(n) || 1)));
+      teamCount = C.TeamCountOptions.includes(clamped) ? clamped : 1;
+      lobbyChanged();
+    }
+
     // ---- Game loop ----
 
     function start() {
@@ -120,7 +128,7 @@ const Host = (() => {
       if (roster.length < 2) return "Need at least 2 players — add a bot?";
       if (pool.length < 1) return "Enable at least one Bomb Time Pool value";
       started = true;
-      sim = Sim.createMatch(rosterView(), pool);
+      sim = Sim.createMatch(rosterView(), pool, teamCount);
       for (const r of roster) if (r.isBot) bots.set(r.id, AI.createBrain());
       net.broadcast({ type: "start" });
       lastTick = performance.now();
@@ -183,8 +191,9 @@ const Host = (() => {
       opts.onSnapshot(Sim.buildSnapshot(sim, "P0", !!opts.localCollector.peek().debug));
     }
 
+    // The host can force a fresh match from any phase, not just match-over.
     function rematch() {
-      if (sim && sim.phase === "matchover") Sim.resetMatch(sim);
+      if (sim) Sim.resetMatch(sim);
     }
 
     // Tear the running match down and reopen the room so everyone drops back to
@@ -205,7 +214,10 @@ const Host = (() => {
       net.close();
     }
 
-    return { addBot, removeBot, setPool, start, rematch, toLobby, destroy, getPool: () => pool.slice() };
+    return {
+      addBot, removeBot, setPool, setTeamCount, start, rematch, toLobby, destroy,
+      getPool: () => pool.slice(), getTeamCount: () => teamCount,
+    };
   }
 
   return { createSession };
