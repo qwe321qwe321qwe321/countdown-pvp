@@ -57,6 +57,84 @@
   let myId = null;
   let latestSnap = null;
 
+  // ---- Local prediction (client only) --------------------------------------
+  // The host is authoritative and only echoes state back at SnapshotRate, so a
+  // client's *own* mouse-driven arm and aim would otherwise lag by a full
+  // round-trip. We drive just the local player's held-bomb arm offset and
+  // weapon/magnify aim straight from the live mouse, mirroring the host's exact
+  // clamp + move-speed integration so the two stay converged (they agree
+  // exactly whenever the mouse is still). Everything the local player does NOT
+  // control is left on the newest snapshot untouched — no interpolation, so we
+  // never add latency to anyone's view. The host renders its own 60Hz sim, so
+  // it needs none of this.
+  let predOffset = null;      // predicted local held-bomb arm offset {x,y}
+  let predHolder = false;     // were we the predicted holder last frame?
+  let lastFrameMs = performance.now();
+
+  // Override the local player's held-bomb position and weapon/magnify aim in a
+  // shallow copy of the snapshot (never mutating the shared latestSnap).
+  function applyLocalPrediction(snap, dtMs) {
+    if (!snap || !myId) return snap;
+    const meIdx = snap.players.findIndex(p => p.id === myId);
+    if (meIdx < 0) { predOffset = null; predHolder = false; return snap; }
+    const me = snap.players[meIdx];
+    const you = snap.you;
+    const st = collector.peek();
+    const mouse = st.mx != null ? { x: st.mx, y: st.my } : null;
+    if (!mouse) return snap;
+
+    let outBomb = snap.bomb;
+    let outMe = me;
+
+    const iAmHolder = !!(you && you.isHolder && snap.bomb && !snap.bomb.transferring && snap.phase === "playing");
+
+    if (iAmHolder) {
+      const seat = { x: me.x, y: me.y };
+      const auth = { x: snap.bomb.x - seat.x, y: snap.bomb.y - seat.y };
+      // Re-seed from authority when a hold just began, or if we somehow drifted
+      // far from it (a correction the host applied that arm motion can't
+      // explain) — otherwise trust the local integration, which is deterministic
+      // from the mouse and matches what the host computes.
+      if (!predHolder || !predOffset ||
+          Math.hypot(predOffset.x - auth.x, predOffset.y - auth.y) > CONFIG.BombArmReach * 1.5) {
+        predOffset = auth;
+      }
+      // Same target + integration the host uses (sim.js stepPlaying).
+      let tx = mouse.x - seat.x, ty = mouse.y - seat.y;
+      const len = Math.hypot(tx, ty);
+      const target = len > 0.001
+        ? (r => ({ x: tx / len * r, y: ty / len * r }))(Math.min(len, CONFIG.BombArmReach))
+        : { x: 0, y: 0 };
+      const dt = Math.min(dtMs, 100) / 1000;
+      const dx = target.x - predOffset.x, dy = target.y - predOffset.y;
+      const stepLen = Math.hypot(dx, dy);
+      const maxStep = CONFIG.BombArmMoveSpeed * dt;
+      predOffset = (stepLen <= maxStep || stepLen < 0.001)
+        ? target
+        : { x: predOffset.x + dx / stepLen * maxStep, y: predOffset.y + dy / stepLen * maxStep };
+      outBomb = Object.assign({}, snap.bomb, { x: seat.x + predOffset.x, y: seat.y + predOffset.y });
+      predHolder = true;
+    } else {
+      predOffset = null;
+      predHolder = false;
+    }
+
+    // Aim: once I've armed a weapon locally, show its pose + sight line pointing
+    // at the live mouse immediately, rather than waiting for the host to echo my
+    // equip back; also keep an already-confirmed weapon/magnify tracking live.
+    const armedNow = armedSlot != null && you && you.alive && snap.phase === "playing" && !iAmHolder;
+    if (armedNow) {
+      outMe = Object.assign({}, me, { equipped: true, aimX: mouse.x, aimY: mouse.y });
+    } else if (me.equipped || me.revealing) {
+      outMe = Object.assign({}, me, { aimX: mouse.x, aimY: mouse.y });
+    }
+
+    if (outBomb === snap.bomb && outMe === me) return snap;
+    const out = Object.assign({}, snap, { bomb: outBomb });
+    if (outMe !== me) { out.players = snap.players.slice(); out.players[meIdx] = outMe; }
+    return out;
+  }
+
   const dom = {
     coinDisplay: $("coinDisplay"),
     statusLine: $("statusLine"),
@@ -159,6 +237,10 @@
   // ---- Render loop (shared by host and client) ----
 
   function frame() {
+    const nowMs = performance.now();
+    const dtMs = nowMs - lastFrameMs;
+    lastFrameMs = nowMs;
+
     if (screens["screen-game"].classList.contains("active") && latestSnap) {
       // Drop the armed card if it left the hand (used elsewhere, discarded,
       // died, or the phase changed) so the UI never shows a stale aim state.
@@ -170,8 +252,12 @@
       }
       canvas.style.cursor = armedSlot != null ? "pointer" : "crosshair";
 
-      Render.draw(ctx, latestSnap, myId);
-      Render.updateDom(dom, latestSnap, {
+      // Host draws its own 60Hz sim raw. Clients draw the newest snapshot with
+      // only the local player's own arm/aim predicted forward from the mouse.
+      const viewSnap = role === "client" ? applyLocalPrediction(latestSnap, dtMs) : latestSnap;
+
+      Render.draw(ctx, viewSnap, myId);
+      Render.updateDom(dom, viewSnap, {
         useCard: s => activateCard(s),
         discardCard: s => { if (armedSlot === s) armedSlot = null; collector.pressDiscard(s); },
         armedSlot,
@@ -185,6 +271,8 @@
   function enterGame() {
     Render.resetDomCache();
     dom.eventLog.innerHTML = "";
+    predOffset = null;
+    predHolder = false;
     show("game");
   }
 
