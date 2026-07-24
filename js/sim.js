@@ -882,7 +882,9 @@ const Sim = (() => {
 
   function refillShopChoice(sim, p, slot, lockInput) {
     if (!sim.modes.roguelikeShop || slot < 0 || slot >= C.RoguelikeChoiceCount) return;
-    p.hand[slot] = Cards.rollCard(shopChoiceBans(sim, p, slot), null);
+    p.hand[slot] = Cards.rollCard(shopChoiceBans(sim, p, slot), null, {
+      magnify: C.RoguelikeMagnifyWeightMultiplier,
+    });
     p.handSlotVersions[slot]++;
     p.shopPaidSlots.delete(slot);
     if (lockInput) p.autoBuyInputLocks.add(slot);
@@ -2111,7 +2113,7 @@ const Sim = (() => {
           // mirrors the real bomb: the creator's initial peek, a living
           // player's active Magnifying Glass, or an eliminated viewer who
           // always sees every bomb timer.
-          privateRemaining: (
+          privateRemaining: !sim.modes.publicSeconds && (
             (f.revealTo === viewerId && f.revealRemaining > 0) ||
             (viewer && sim.phase === "playing" &&
               (!viewer.alive ||

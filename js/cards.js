@@ -117,18 +117,22 @@ const Cards = (() => {
   // Weighted random draw over CONFIG.CardDropWeights. Host-only.
   // `excludeIds` drops cards from this roll entirely (e.g. Fake Bomb while
   // bombs in play are at the cap); `allowedIds` limits the roll to this
-  // round's four-card pool. The remaining weights renormalize.
-  function rollCard(excludeIds, allowedIds) {
+  // round's four-card pool. Optional per-card multipliers let a mode tune its
+  // own draw odds without changing the normal round-pool economy.
+  function rollCard(excludeIds, allowedIds, weightMultipliers) {
     const weights = CONFIG.CardDropWeights;
+    const weightFor = id => weights[id] *
+      (weightMultipliers && weightMultipliers[id] != null
+        ? weightMultipliers[id] : 1);
     const ids = Object.keys(weights).filter(id =>
-      weights[id] > 0 &&
+      weightFor(id) > 0 &&
       !(excludeIds && excludeIds.includes(id)) &&
       (!allowedIds || allowedIds.includes(id)));
     if (!ids.length) return null;
-    const total = ids.reduce((s, id) => s + weights[id], 0);
+    const total = ids.reduce((s, id) => s + weightFor(id), 0);
     let r = Math.random() * total;
     for (const id of ids) {
-      r -= weights[id];
+      r -= weightFor(id);
       if (r <= 0) return id;
     }
     return ids[ids.length - 1];

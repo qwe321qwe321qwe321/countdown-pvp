@@ -61,6 +61,7 @@ const CONFIG = {
   CardDrawCost: 5,
   ShopRerollCost: 2,
   RoguelikeChoiceCount: 3,
+  RoguelikeMagnifyWeightMultiplier: 2.0,  // make information tools notably more common in the full-pool shop
   MaxHandSize: 5,
   StartingHand: ["magnify"],              // the opening round's attack card is added after its pool is rolled
   // Three tiers: common utility at 10, the stronger swing cards (Freeze

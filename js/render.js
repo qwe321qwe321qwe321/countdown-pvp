@@ -9,6 +9,7 @@ const Render = (() => {
   // Team battle: color by team instead of by seat, so teammates read as one
   // side at a glance. Capped at CONFIG.TeamCountOptions' max (4).
   const TEAM_COLORS = ["#e6604c", "#4c9be6", "#5cc46a", "#e6c14c"];
+  const BOMB_TIMER_COLOR = "#ffe27a";
 
   // Every player's identity color: team color when teams are in play
   // (snap.teamCount > 1), otherwise the per-seat color as before.
@@ -170,14 +171,14 @@ const Render = (() => {
         ctx.font = "bold 17px monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillStyle = "#ffe27a";
+        ctx.fillStyle = BOMB_TIMER_COLOR;
         ctx.fillText(f.privateRemaining.toFixed(1) + "s", f.x, f.y);
         ctx.textBaseline = "alphabetic";
       } else if (f.publicRemaining != null) {
         ctx.font = "bold 17px monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillStyle = "#f4f4f4";
+        ctx.fillStyle = BOMB_TIMER_COLOR;
         ctx.fillText(f.publicRemaining.toFixed(1) + "s", f.x, f.y);
         ctx.textBaseline = "alphabetic";
       }
@@ -831,7 +832,7 @@ const Render = (() => {
       ctx.font = "bold 17px monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillStyle = "#ffe27a";
+      ctx.fillStyle = BOMB_TIMER_COLOR;
       ctx.fillText(snap.you.reveal.bombTime.toFixed(1) + "s", b.x, b.y);
       ctx.textBaseline = "alphabetic";
     } else if (b.publicRemaining != null) {
@@ -840,7 +841,7 @@ const Render = (() => {
       ctx.font = "bold 17px monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillStyle = "#ffe27a";
+      ctx.fillStyle = BOMB_TIMER_COLOR;
       ctx.fillText(b.publicRemaining.toFixed(1) + "s", b.x, b.y);
       ctx.textBaseline = "alphabetic";
     }

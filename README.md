@@ -45,7 +45,8 @@ The host lobby also exposes four experimental switches:
 - **Roguelike 3-choice shop** replaces auto-buy/hand storage with three
   personal choices plus a paid reroll in slot 4. Choosing a card costs
   `CardDrawCost`; after it is consumed, that slot immediately rolls a new card
-  from every enabled card rather than the round Shop Pool.
+  from every enabled card rather than the round Shop Pool. Magnifying Glass
+  uses a mode-specific 2× draw weight.
 - **Wobbly hitscan weapons** makes firearm rounds and the universal charged
   shot resolve instantly. Their original firing cycle controls sight wobble
   (slower weapons wander farther), and every ray receives additional random
