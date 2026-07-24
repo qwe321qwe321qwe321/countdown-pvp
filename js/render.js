@@ -1063,6 +1063,7 @@ const Render = (() => {
       ctx.font = "bold 20px sans-serif";
       const progress = snap.you.deadWeaponCharge;
       const minimumProgress = C.ChargedShotMinimumChargeTime / C.ChargedShotChargeTime;
+      const chargeTimeScale = Math.max(1, snap.players.length) / C.ChargedShotBaselinePlayers;
       if (progress >= 1) {
         ctx.fillStyle = "#7dff9b";
         ctx.fillText("SLING SHOT FULL POWER — RELEASE (100% SPEED)", cx, C.WorldHeight - 24);
@@ -1076,8 +1077,9 @@ const Render = (() => {
           cx, C.WorldHeight - 24);
       } else {
         ctx.fillStyle = "#dca0ff";
-        const elapsed = progress * C.ChargedShotChargeTime;
-        ctx.fillText(`CHARGING SLING SHOT: ${elapsed.toFixed(1)} / ${C.ChargedShotMinimumChargeTime.toFixed(1)}s`,
+        const elapsed = progress * C.ChargedShotChargeTime * chargeTimeScale;
+        const minimumTime = C.ChargedShotMinimumChargeTime * chargeTimeScale;
+        ctx.fillText(`CHARGING SLING SHOT: ${elapsed.toFixed(1)} / ${minimumTime.toFixed(1)}s`,
           cx, C.WorldHeight - 24);
       }
     } else if (snap.you && !snap.you.alive && snap.phase !== "matchover") {
@@ -1231,7 +1233,7 @@ const Render = (() => {
       dom.aimHint.textContent = reinforcedActive
         ? "🦾 REINFORCED ARM — point at any living player, then press SPACE to throw"
         : chargedActive
-          ? `🪃 CHARGED SLING — release after ${C.ChargedShotMinimumChargeTime}s at 33% speed, or hold ${C.ChargedShotChargeTime}s for full speed (${C.ChargedShotAmount}s)`
+          ? `🪃 CHARGED SLING — release after ${(C.ChargedShotMinimumChargeTime * Math.max(1, snap.players.length) / C.ChargedShotBaselinePlayers).toFixed(1)}s at 33% speed, or hold ${(C.ChargedShotChargeTime * Math.max(1, snap.players.length) / C.ChargedShotBaselinePlayers).toFixed(1)}s for full speed (${C.ChargedShotAmount}s)`
           : "🎯 AIMING — click to fire (hold for machine gun), right-click/Esc to cancel";
     }
 

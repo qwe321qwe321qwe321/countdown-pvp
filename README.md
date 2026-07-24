@@ -49,7 +49,8 @@ the result with an opaque transfer id, so network round-trip latency cannot spoi
 - `js/sim.js` — the authoritative state machine: bomb-time-pool draw → initial time reveal →
   3-2-1 → hidden timer → random holder → passing/cards/projectiles → explosion → elimination
   → next bomb → last survivor wins, plus `buildSnapshot()` (the only view clients ever get).
-- `js/ai.js` — bots submit the same plain input shape a network client does.
+- `js/ai.js` — bots submit the same plain input shape a network client does, obey
+  Lights Out visibility, use the universal sling, and avoid hostile team actions.
 - `js/net.js` — thin PeerJS wrapper (host claims a room-code peer id; per-peer sends so each
   client gets a tailored snapshot).
 - `js/host.js` — fixed 60 Hz sim loop, merges local + bot + remote inputs, ~20 Hz snapshots.
@@ -78,7 +79,7 @@ the result with an opaque transfer id, so network round-trip latency cannot spoi
   shots, catch repair kits, or hide behind the holder's body.
 - **Projectiles**: every gun/repair card fires a real moving projectile (no hitscan).
   Firearm rounds travel faster than the charged sling shot. The -5s gun is a three-round
-  semi-auto, the -3s shotgun has two three-pellet shells, and the -1s machine gun has a
+  semi-auto, the -3s shotgun has one three-pellet shell, and the -1s machine gun has a
   ten-round hold-to-fire magazine.
 - **Time rules**: reductions clamp at `MinimumBombTimeAfterReduction` (never explode from a
   hit; natural countdown to 0 still does); no upper limit on bomb time.
@@ -91,15 +92,17 @@ the result with an opaque transfer id, so network round-trip latency cannot spoi
   personal radius. An active Magnifying Glass becomes a directional flashlight.
 - **Economy**: integer coins only; passive income for alive players and a bomb pot cashed
   on throw. Purchases happen automatically when affordable. A holder can taunt to farm the
-  pot at 2× speed while surrendering arm and pass control.
+  pot at 2× speed while surrendering arm and pass control. If a full pot is damaged by a
+  coin-stealing shot, it continues replenishing back to its $10 cap.
 - **Fake Bomb reward**: a fake pops with a distinct confetti/coin effect instead of the
   lethal blast ring and awards $10 to the closest living player.
 - **Bomb pot damage**: each damaging hit on the real bomb steals up to 2 coins
   from its banked pot for the shooter, with a public coin-transfer animation
   (blocked shots do not).
 - **Elimination**: the only death is holding the bomb at 0. Dead players lose coins and
-  cards, retain the -3s charged sling shot (releasable after one second at 33% speed,
-  scaling linearly to full speed at two seconds), and receive one random global item
+  cards, retain the -3s charged sling shot (releasable after one second at 33% speed
+  in a four-player match, scaling linearly to full speed at two seconds; both charge
+  times scale with the match's player count), and receive one random global item
   (Speed Up, Freeze, Lights Out, or Reverse) each round. Eliminated players always see the
   exact timers on the real bomb and every fake bomb. Last survivor wins; host can rematch.
 - **Debug UI** (checkbox, dev only): exact bomb time, speed/shield/curse state, pass lock,

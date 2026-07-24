@@ -101,7 +101,7 @@ const CONFIG = {
   MuzzleOffset: 32,                       // spawn distance from body center toward aim
   Gun5Magazine: 3,                        // semi-auto: three individually aimed rounds
   Gun5Cooldown: 0.28,
-  Gun3Magazine: 2,                        // shotgun: two trigger pulls
+  Gun3Magazine: 1,                        // shotgun: one trigger pull
   Gun3Pellets: 3,
   Gun3SpreadDegrees: 13,
   Gun3Cooldown: 0.5,
@@ -110,8 +110,9 @@ const CONFIG = {
   AimLineLength: 520,                     // how far a wielded weapon's sight line reaches
 
   // ---- Universal charged sling shot ----
-  ChargedShotMinimumChargeTime: 1.0,        // release before this cancels; at this point the shot is half speed
+  ChargedShotMinimumChargeTime: 1.0,        // release before this cancels; at this point the shot is one-third speed
   ChargedShotChargeTime: 2.0,               // full charge reaches ChargedProjectileSpeed
+  ChargedShotBaselinePlayers: 4,             // charge times scale linearly from this player count
   ChargedShotAmount: -3,
   ChargedShotAimSpeed: 150,                // world units/sec while primary fire is held (deliberately sluggish)
 
@@ -162,6 +163,7 @@ const CONFIG = {
   BotParryChance: 0.08,                   // ordinary bots should only very rarely attempt a parry
   BotParryMaxIncomingSpeed: 600,           // faster throws are outside a bot's plausible reaction limit
   BotKnownBombPanicTime: 5.0,             // recently observed low timer => pass at first legal instant
+  BotSlingUseChance: 0.35,                // chance to choose the universal sling over a ready card
 
   // ---- Teams ----
   TeamCountOptions: [1, 2, 3, 4],          // 1 = no teams (free-for-all)

@@ -24,6 +24,12 @@ const Sim = (() => {
     return Math.max(1, alive) / C.CoinEconomyBaselinePlayers;
   }
 
+  // Keep the table-wide sling fire rate roughly stable as seats are added.
+  // Four players retain the tuned timings; eight charge at half the rate.
+  function chargedShotChargeRate(sim) {
+    return C.ChargedShotBaselinePlayers / Math.max(1, sim.players.length);
+  }
+
   // ---- Geometry helpers ----------------------------------------------------
 
   // Fixed seats around the table. Players never move for the whole match.
@@ -1244,7 +1250,8 @@ const Sim = (() => {
 
       if (triggerHeld) {
         p.deadWeaponCharging = true;
-        p.deadWeaponCharge = Math.min(C.ChargedShotChargeTime, p.deadWeaponCharge + dt);
+        p.deadWeaponCharge = Math.min(C.ChargedShotChargeTime,
+          p.deadWeaponCharge + dt * chargedShotChargeRate(sim));
         continue;
       }
 
@@ -1352,11 +1359,17 @@ const Sim = (() => {
       const holding = !!heldBomb;
       p.taunting = holding && !!(inp.primaryFire || inp.deadFire);
       const stalling = holding && p.holdElapsed >= C.BombHolderCoinDuration;
+      // Once the real bomb has naturally reached its cap, a damaging hit may
+      // steal from that stored pot after the normal farming window expires.
+      // Let the holder replenish that damage instead of permanently freezing
+      // the pot below its cap. Fake bombs never lose pot to projectile hits.
+      const refillingStolenPot = stalling && heldBomb === b &&
+        heldBomb.pot < C.BombHolderPotCap;
       if (holding) {
         // Farming the bomb replaces passive income entirely, not stacks on
         // top of it — no natural growth while holding, only the pot.
         p.passiveAcc = 0;
-        if (stalling) {
+        if (stalling && !refillingStolenPot) {
           p.holderAcc = 0;
         } else {
           p.holderAcc += dt * (p.taunting ? C.TauntFarmMultiplier : 1);
@@ -1733,6 +1746,8 @@ const Sim = (() => {
         const isHolderNow = !!(b && b.holderId === p.id) || sim.fakeBombs.some(f => f.holderId === p.id);
         const handsFullNow = !!(b && b.holderId === p.id && !b.transfer) ||
           !!fakeHeldBy(sim, p.id);
+        const refillingStolenPot = !!(b && b.holderId === p.id && !b.transfer &&
+          p.holdElapsed >= C.BombHolderCoinDuration && b.pot < C.BombHolderPotCap);
         const chargedWeapon = !p.disconnected &&
           (!p.alive || (!handsFullNow && !equipped && !revealing));
         return {
@@ -1749,12 +1764,14 @@ const Sim = (() => {
           aimX: (equipped || revealing || chargedWeapon) ? p.aim.x : null,
           aimY: (equipped || revealing || chargedWeapon) ? p.aim.y : null,
           revealing,                         // using a Magnifying Glass right now — visible to everyone (not the reading itself)
-          // Currently inside the holder-bonus income window — visible to
-          // everyone so the extra coin trickle can be shown as a particle cue.
-          earningBonus: isHolderNow && p.holdElapsed < C.BombHolderCoinDuration,
+          // Also stays active while restoring coins stolen from an already
+          // maxed real-bomb pot, even after the normal farming window.
+          earningBonus: isHolderNow &&
+            (p.holdElapsed < C.BombHolderCoinDuration || refillingStolenPot),
           // Past the grace window: holding the bomb currently earns nothing —
           // shown so everyone can see the stalling penalty has kicked in.
-          earningPenalty: isHolderNow && p.holdElapsed >= C.BombHolderCoinDuration,
+          earningPenalty: isHolderNow &&
+            p.holdElapsed >= C.BombHolderCoinDuration && !refillingStolenPot,
           // Coins and hand size are public — hovering another player shows
           // both so you can size up who's ahead and who's stocked up on cards.
           coins: p.coins,

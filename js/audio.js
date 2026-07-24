@@ -228,6 +228,22 @@ const GameAudio = (() => {
     }
   }
 
+  // A rematch stays on the game screen, so it does not pass through the
+  // normal enterGame audio setup. Rebuild the scheduler at the start of the
+  // next match and resume a browser-suspended context if necessary.
+  function restartMusicTimeline() {
+    init();
+    if (!ctx) return;
+    const restart = () => {
+      if (scheduler != null) window.clearInterval(scheduler);
+      musicStep = 0;
+      nextStepAt = ctx.currentTime + 0.06;
+      scheduler = window.setInterval(scheduleMusic, 40);
+    };
+    if (ctx.state === "suspended") ctx.resume().then(restart).catch(() => {});
+    else restart();
+  }
+
   function scheduleMusicStep(when, step) {
     if (!prefs.music) return;
     const playing = scene === "game";
@@ -293,6 +309,10 @@ const GameAudio = (() => {
       lastCountdown = snap.phase === "countdown" ? Math.ceil(snap.phaseTimer) : null;
       lastParryState = snap.you && snap.you.parry ? snap.you.parry.state : null;
       return;
+    }
+
+    if (lastPhase === "matchover" && snap.phase === "reveal") {
+      restartMusicTimeline();
     }
 
     if (snap.phase !== lastPhase) {

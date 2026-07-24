@@ -25,6 +25,10 @@ const AI = (() => {
       knownBombRound: null,
       forcePass: false,
       reinforcedTargetId: null,
+      slingCharging: false,
+      slingTargetId: null,
+      slingAimReadyAt: 0,
+      blackoutAim: Math.random() * Math.PI * 2,
     };
   }
 
@@ -44,6 +48,9 @@ const AI = (() => {
     brain.knownBombRound = null;
     brain.forcePass = false;
     brain.reinforcedTargetId = null;
+    brain.slingCharging = false;
+    brain.slingTargetId = null;
+    brain.slingAimReadyAt = 0;
   }
 
   function findSlot(player, pred) {
@@ -64,6 +71,87 @@ const AI = (() => {
       (sim.teamCount <= 1 || other.team !== player.team);
   }
 
+  function sameTeam(sim, player, other) {
+    return !!other && other.id !== player.id &&
+      sim.teamCount > 1 && other.team === player.team;
+  }
+
+  function nextAliveInDirection(sim, seat, reversed) {
+    const direction = reversed ? -1 : 1;
+    for (let k = 1; k <= sim.seatCount; k++) {
+      const wanted = (seat + direction * k + sim.seatCount * 2) % sim.seatCount;
+      const candidate = sim.players.find(p => p.seat === wanted);
+      if (candidate && candidate.alive) return candidate;
+    }
+    return null;
+  }
+
+  function nextPassRecipient(sim, player, reversed = sim.reversePassing) {
+    return nextAliveInDirection(sim, player.seat, reversed);
+  }
+
+  // During flight, strategic effects apply to the receiver rather than the
+  // sender whose holderId remains attached until arrival.
+  function effectiveBombHolder(sim) {
+    const b = sim.bomb;
+    if (!b) return null;
+    return Sim.getPlayer(sim, b.transfer ? b.transfer.toId : b.holderId);
+  }
+
+  function nextCurseVictim(sim) {
+    const b = sim.bomb;
+    if (!b) return null;
+    if (b.transfer) return Sim.getPlayer(sim, b.transfer.toId);
+    const holder = Sim.getPlayer(sim, b.holderId);
+    return holder ? nextPassRecipient(sim, holder) : null;
+  }
+
+  function pointInCast(sim, player, point, radius, halfWidth) {
+    const seat = Sim.seatPosition(player.seat, sim.seatCount);
+    let dx = player.aim.x - seat.x, dy = player.aim.y - seat.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001) return false;
+    dx /= len; dy /= len;
+    const fx = point.x - seat.x, fy = point.y - seat.y;
+    const forward = fx * dx + fy * dy;
+    const side = fx * -dy + fy * dx;
+    return forward >= -radius &&
+      forward <= C.MagnifyCastLength + radius &&
+      Math.abs(side) <= halfWidth + radius;
+  }
+
+  function canSeePoint(sim, player, point, radius = 0) {
+    if (!point || !player.alive || sim.blackoutRemaining <= 0) return true;
+    const seat = Sim.seatPosition(player.seat, sim.seatCount);
+    if (Math.hypot(point.x - seat.x, point.y - seat.y) <=
+        C.BlackoutVisionRadius + radius) return true;
+    return player.revealRemaining > 0 &&
+      pointInCast(sim, player, point, radius, C.MagnifyCastWidth * 1.4);
+  }
+
+  function aimIntoDarkness(sim, player, brain, inp) {
+    const seat = Sim.seatPosition(player.seat, sim.seatCount);
+    brain.blackoutAim += 0.04 + (Math.random() - 0.5) * 0.01;
+    inp.mx = seat.x + Math.cos(brain.blackoutAim) * C.AimLineLength;
+    inp.my = seat.y + Math.sin(brain.blackoutAim) * C.AimLineLength;
+  }
+
+  function bombLikeWorldPos(sim, bombLike) {
+    if (bombLike === sim.bomb) return Sim.bombWorldPos(sim);
+    if (bombLike.transfer) {
+      const tr = bombLike.transfer;
+      const t = Math.min(1, tr.elapsed / tr.duration);
+      return {
+        x: tr.fromPos.x + (tr.toPos.x - tr.fromPos.x) * t,
+        y: tr.fromPos.y + (tr.toPos.y - tr.fromPos.y) * t,
+      };
+    }
+    const holder = Sim.getPlayer(sim, bombLike.holderId);
+    if (!holder) return null;
+    const seat = Sim.seatPosition(holder.seat, sim.seatCount);
+    return { x: seat.x + bombLike.offset.x, y: seat.y + bombLike.offset.y };
+  }
+
   function shieldCoversRealBomb(sim, bombPos) {
     const b = sim.bomb;
     if (!b || b.shieldRemaining <= 0 || !b.shieldOwnerId) return false;
@@ -76,21 +164,13 @@ const AI = (() => {
 
   function magnifyCoversRealBomb(sim, player, bombPos) {
     if (player.revealRemaining <= 0 || shieldCoversRealBomb(sim, bombPos)) return false;
-    const seat = Sim.seatPosition(player.seat, sim.seatCount);
-    let dx = player.aim.x - seat.x, dy = player.aim.y - seat.y;
-    const len = Math.hypot(dx, dy);
-    if (len < 0.001) return false;
-    dx /= len; dy /= len;
-    const fx = bombPos.x - seat.x, fy = bombPos.y - seat.y;
-    const forward = fx * dx + fy * dy;
-    const side = fx * -dy + fy * dx;
-    return forward >= -C.BombRadius &&
-      forward <= C.MagnifyCastLength + C.BombRadius &&
-      Math.abs(side) <= C.MagnifyCastWidth / 2 + C.BombRadius;
+    return pointInCast(sim, player, bombPos, C.BombRadius,
+      C.MagnifyCastWidth / 2);
   }
 
   function rememberVisibleTimer(sim, player, brain, bombPos) {
-    const publicTimer = sim.playElapsed < C.PublicTimeRevealDuration;
+    const publicTimer = sim.playElapsed < C.PublicTimeRevealDuration &&
+      canSeePoint(sim, player, bombPos, C.BombRadius);
     const privateTimer = magnifyCoversRealBomb(sim, player, bombPos);
     if (!publicTimer && !privateTimer) return false;
     brain.knownBombRemaining = sim.bomb.remaining;
@@ -116,7 +196,7 @@ const AI = (() => {
 
   // Find a projectile whose current line actually intersects the bomb. Each
   // projectile gets only one notice roll; a miss is not re-rolled every tick.
-  function noticeProjectileThreat(sim, brain, bombPos) {
+  function noticeProjectileThreat(sim, player, brain, bombPos) {
     if (brain.dodge) {
       const stillFlying = sim.projectiles.some(pr => pr.id === brain.dodge.projectileId);
       if (stillFlying && sim.time <= brain.dodge.expiresAt) return brain.dodge;
@@ -126,6 +206,7 @@ const AI = (() => {
     const candidates = [];
     for (const pr of sim.projectiles) {
       if (pr.amount == null || pr.amount >= 0 || brain.seenProjectileIds.has(pr.id)) continue;
+      if (!canSeePoint(sim, player, pr, C.ProjectileRadius)) continue;
       const speedSq = pr.vx * pr.vx + pr.vy * pr.vy;
       if (speedSq < 1) continue;
       const rx = bombPos.x - pr.x, ry = bombPos.y - pr.y;
@@ -172,6 +253,9 @@ const AI = (() => {
     if (!incoming) return;
 
     const tr = incoming.transfer;
+    if (!canSeePoint(sim, player, bombLikeWorldPos(sim, incoming), C.BombRadius)) return;
+    const returnTarget = nextPassRecipient(sim, player);
+    if (sameTeam(sim, player, returnTarget)) return;
     if (brain.parryTransferId !== tr.id) {
       brain.parryTransferId = tr.id;
       brain.parryWillAttempt = tr.speed <= C.BotParryMaxIncomingSpeed &&
@@ -195,10 +279,12 @@ const AI = (() => {
   }
 
   function chooseReinforcedTarget(sim, player) {
-    const opponents = sim.players.filter(p => p.alive && isOpponent(sim, player, p));
-    const others = sim.players.filter(p => p.alive && p.id !== player.id);
-    const pool = opponents.length ? opponents : others;
-    return pool.length ? randomChoice(pool) : null;
+    const opponents = sim.players.filter(p => {
+      if (!p.alive || !isOpponent(sim, player, p)) return false;
+      const seat = Sim.seatPosition(p.seat, sim.seatCount);
+      return canSeePoint(sim, player, seat, C.PlayerBodyRadius);
+    });
+    return opponents.length ? randomChoice(opponents) : null;
   }
 
   function startAimedItem(sim, player, brain, inp, slot) {
@@ -207,11 +293,47 @@ const AI = (() => {
     inp.equip = slot;
   }
 
+  function aimedItemIsSafe(sim, player, def) {
+    const holder = effectiveBombHolder(sim);
+    if (!holder || sim.teamCount <= 1) return true;
+    if (def.kind === "projectile" && def.amount > 0) {
+      return sameTeam(sim, player, holder);
+    }
+    return isOpponent(sim, player, holder);
+  }
+
+  function speedItemIsSafe(sim, player, def) {
+    const holder = effectiveBombHolder(sim);
+    if (!holder || sim.teamCount <= 1) return true;
+    return def.mult < 1
+      ? holder.id === player.id || sameTeam(sim, player, holder)
+      : isOpponent(sim, player, holder);
+  }
+
+  function curseIsSafe(sim, player) {
+    const victim = nextCurseVictim(sim);
+    return !victim || sim.teamCount <= 1 || isOpponent(sim, player, victim);
+  }
+
+  function reverseHelpsTeam(sim, player) {
+    if (sim.teamCount <= 1) return true;
+    const b = sim.bomb;
+    if (!b || b.transfer) return false;
+    const holder = Sim.getPlayer(sim, b.holderId);
+    if (!holder) return false;
+    const current = nextPassRecipient(sim, holder, sim.reversePassing);
+    const reversed = nextPassRecipient(sim, holder, !sim.reversePassing);
+    return sameTeam(sim, player, current) && isOpponent(sim, player, reversed);
+  }
+
   function continueAimedItem(sim, player, brain, inp) {
     if (brain.aimSlot == null) return false;
     const def = cardAt(player, brain.aimSlot);
+    const bombPos = Sim.bombWorldPos(sim);
     if (!def || !["projectile", "grapple"].includes(def.kind) ||
-        shieldCoversRealBomb(sim, Sim.bombWorldPos(sim))) {
+        shieldCoversRealBomb(sim, bombPos) ||
+        !canSeePoint(sim, player, bombPos, C.BombRadius) ||
+        !aimedItemIsSafe(sim, player, def)) {
       brain.aimSlot = null;
       return false;
     }
@@ -225,6 +347,75 @@ const AI = (() => {
     }
     brain.aimSlot = null;
     return true;
+  }
+
+  function slingTargetIsSafe(sim, player, bombPos) {
+    const holder = effectiveBombHolder(sim);
+    if (!holder || holder.id === player.id ||
+        !canSeePoint(sim, player, bombPos, C.BombRadius)) return false;
+    return sim.teamCount <= 1 || isOpponent(sim, player, holder);
+  }
+
+  function aimSlingAway(sim, player, brain, inp) {
+    if (sim.blackoutRemaining > 0) {
+      aimIntoDarkness(sim, player, brain, inp);
+      return;
+    }
+    const seat = Sim.seatPosition(player.seat, sim.seatCount);
+    const centerX = C.WorldWidth / 2, centerY = C.WorldHeight / 2;
+    let dx = seat.x - centerX, dy = seat.y - centerY;
+    const len = Math.hypot(dx, dy) || 1;
+    inp.mx = seat.x + dx / len * C.AimLineLength;
+    inp.my = seat.y + dy / len * C.AimLineLength;
+  }
+
+  function continueSling(sim, player, brain, inp, bombPos) {
+    if (!brain.slingCharging) return false;
+    const holder = effectiveBombHolder(sim);
+    if (!slingTargetIsSafe(sim, player, bombPos)) {
+      brain.slingTargetId = null;
+      inp.primaryFire = true; // keep the charged shot; never release it toward a teammate
+      aimSlingAway(sim, player, brain, inp);
+      return true;
+    }
+
+    if (brain.slingTargetId !== holder.id) {
+      brain.slingTargetId = holder.id;
+      brain.slingAimReadyAt = sim.time + C.BotAimDuration +
+        Math.random() * C.BotAimJitter;
+    }
+    inp.mx = bombPos.x;
+    inp.my = bombPos.y;
+    const fullyCharged = player.deadWeaponCharge + 1e-9 >= C.ChargedShotChargeTime;
+    if (fullyCharged && sim.time >= brain.slingAimReadyAt) {
+      inp.primaryFire = false;
+      brain.slingCharging = false;
+      brain.slingTargetId = null;
+      brain.nextActAt = sim.time + 1.2 + Math.random() * 2.8;
+    } else {
+      inp.primaryFire = true;
+    }
+    return true;
+  }
+
+  function startSling(sim, player, brain, inp, bombPos) {
+    const holder = effectiveBombHolder(sim);
+    if (!holder || !slingTargetIsSafe(sim, player, bombPos)) return false;
+    brain.slingCharging = true;
+    brain.slingTargetId = holder.id;
+    brain.slingAimReadyAt = sim.time + C.BotAimDuration +
+      Math.random() * C.BotAimJitter;
+    inp.mx = bombPos.x;
+    inp.my = bombPos.y;
+    inp.primaryFire = true;
+    return true;
+  }
+
+  function deadItemIsSafe(sim, player, def) {
+    if (!def || sim.teamCount <= 1 || def.kind === "blackout") return !!def;
+    if (def.kind === "speed") return speedItemIsSafe(sim, player, def);
+    if (def.kind === "reverse") return reverseHelpsTeam(sim, player);
+    return false;
   }
 
   function useHeldItem(sim, player, brain, inp, threat, exactPrivateTimer) {
@@ -247,13 +438,20 @@ const AI = (() => {
           sim.playElapsed >= C.PublicTimeRevealDuration) {
         choices.push(slot, slot); // information is especially useful while carrying
       } else if (def.kind === "speed" && def.mult < 1 &&
+          speedItemIsSafe(sim, player, def) &&
           (b.speedMult > 1 || known == null || known <= C.BotKnownBombPanicTime + 2)) {
         choices.push(slot);
       } else if (def.kind === "shield" && b.shieldRemaining <= 0) {
         choices.push(slot);
-      } else if (["curse", "blackout", "reverse"].includes(def.kind)) {
+      } else if (def.kind === "curse" && !b.curseActive &&
+          curseIsSafe(sim, player)) {
         choices.push(slot);
-      } else if (def.kind === "reinforced" && player.armBuffRemaining <= 0) {
+      } else if (def.kind === "blackout") {
+        choices.push(slot);
+      } else if (def.kind === "reverse" && reverseHelpsTeam(sim, player)) {
+        choices.push(slot);
+      } else if (def.kind === "reinforced" && player.armBuffRemaining <= 0 &&
+          chooseReinforcedTarget(sim, player)) {
         choices.push(slot);
       }
     }
@@ -265,6 +463,8 @@ const AI = (() => {
       if (def.kind === "reinforced") {
         const target = chooseReinforcedTarget(sim, player);
         brain.reinforcedTargetId = target ? target.id : null;
+        brain.forcePass = true;
+      } else if (def.kind === "reverse" && b.holderId === player.id) {
         brain.forcePass = true;
       }
       if (def.kind === "magnify" || exactPrivateTimer) {
@@ -279,26 +479,30 @@ const AI = (() => {
     if (continueAimedItem(sim, player, brain, inp) || sim.time < brain.nextActAt) return;
 
     const b = sim.bomb;
-    const holder = Sim.getPlayer(sim, b.holderId);
+    const bombPos = Sim.bombWorldPos(sim);
+    const bombVisible = canSeePoint(sim, player, bombPos, C.BombRadius);
     const choices = [];
     for (let slot = 0; slot < player.hand.length; slot++) {
       const def = cardAt(player, slot);
       if (!def) continue;
       if (["projectile", "grapple"].includes(def.kind)) {
-        const helpsHolder = def.kind === "projectile" && def.amount > 0;
-        if (!holder || sim.teamCount <= 1 ||
-            (helpsHolder ? !isOpponent(sim, player, holder) : isOpponent(sim, player, holder))) {
+        if (bombVisible && aimedItemIsSafe(sim, player, def)) {
           choices.push({ slot, aimed: true });
         }
       } else if (def.kind === "magnify" && player.revealRemaining <= 0) {
         choices.push({ slot, aimed: false });
-      } else if (def.kind === "speed") {
-        const helpsHolder = def.mult < 1;
-        if (!holder || sim.teamCount <= 1 ||
-            (helpsHolder ? !isOpponent(sim, player, holder) : isOpponent(sim, player, holder))) {
-          choices.push({ slot, aimed: false });
-        }
-      } else if (["curse", "fakebomb", "blackout", "reverse"].includes(def.kind)) {
+      } else if (def.kind === "speed" && speedItemIsSafe(sim, player, def)) {
+        choices.push({ slot, aimed: false });
+      } else if (def.kind === "curse" && !b.curseActive &&
+          curseIsSafe(sim, player)) {
+        choices.push({ slot, aimed: false });
+      } else if (def.kind === "fakebomb" &&
+          (sim.teamCount <= 1 ||
+            isOpponent(sim, player, nextPassRecipient(sim, player)))) {
+        choices.push({ slot, aimed: false });
+      } else if (def.kind === "blackout") {
+        choices.push({ slot, aimed: false });
+      } else if (def.kind === "reverse" && reverseHelpsTeam(sim, player)) {
         choices.push({ slot, aimed: false });
       } else if (def.kind === "shield" && b.shieldRemaining <= 0 &&
           b.transfer && b.transfer.toId === player.id) {
@@ -306,7 +510,12 @@ const AI = (() => {
       }
     }
 
-    if (choices.length) {
+    const trySling = player.revealRemaining <= 0 &&
+      slingTargetIsSafe(sim, player, bombPos) &&
+      (!choices.length || Math.random() < C.BotSlingUseChance);
+    if (trySling) {
+      startSling(sim, player, brain, inp, bombPos);
+    } else if (choices.length) {
       const choice = randomChoice(choices);
       if (choice.aimed) startAimedItem(sim, player, brain, inp, choice.slot);
       else inp.use.push(choice.slot);
@@ -324,10 +533,12 @@ const AI = (() => {
     if (!player.alive) {
       if (sim.phase === "playing" && sim.bomb) {
         const bombPos = Sim.bombWorldPos(sim);
-        inp.mx = bombPos.x;
-        inp.my = bombPos.y;
-        inp.primaryFire = player.deadWeaponCharge + 1e-9 < C.ChargedShotChargeTime;
-        if (player.hand[0] && sim.time >= brain.nextActAt && Math.random() < 0.35) {
+        if (!continueSling(sim, player, brain, inp, bombPos)) {
+          startSling(sim, player, brain, inp, bombPos);
+        }
+        const def = cardAt(player, 0);
+        if (deadItemIsSafe(sim, player, def) &&
+            sim.time >= brain.nextActAt && Math.random() < 0.35) {
           inp.use.push(0);
           brain.nextActAt = sim.time + 2;
         }
@@ -342,13 +553,16 @@ const AI = (() => {
     const heldFake = sim.fakeBombs.find(f => f.holderId === player.id && !f.transfer);
     const holdingReal = b.holderId === player.id && !b.transfer;
     const holding = holdingReal || !!heldFake;
+    const bombVisible = canSeePoint(sim, player, bombPos, C.BombRadius);
     advanceKnownTimer(sim, brain);
     const exactPrivateTimer = rememberVisibleTimer(sim, player, brain, bombPos);
 
     if (!holding) considerParry(sim, player, brain, inp);
 
     if (holding) {
-      const threat = noticeProjectileThreat(sim, brain, bombPos);
+      brain.slingCharging = false;
+      brain.slingTargetId = null;
+      const threat = noticeProjectileThreat(sim, player, brain, bombPos);
       const reinforcedTarget = brain.reinforcedTargetId &&
         Sim.getPlayer(sim, brain.reinforcedTargetId);
 
@@ -373,13 +587,20 @@ const AI = (() => {
       }
 
       const known = estimatedKnownTime(sim, brain);
+      const normalRecipient = nextPassRecipient(sim, player);
+      const plannedRecipient = player.armBuffRemaining > 0 && reinforcedTarget
+        ? reinforcedTarget : normalRecipient;
+      const lethalForTeammate = holdingReal &&
+        sameTeam(sim, player, plannedRecipient) &&
+        known != null && known <= C.BotKnownBombPanicTime;
       if (holdingReal && (exactPrivateTimer ||
-          (known != null && known <= C.BotKnownBombPanicTime))) {
+          (known != null && known <= C.BotKnownBombPanicTime)) &&
+          !lethalForTeammate) {
         brain.forcePass = true;
       }
 
       if (player.passLock <= 0) {
-        if (brain.forcePass) {
+        if (brain.forcePass && !lethalForTeammate) {
           inp.pass = true;
           brain.forcePass = false;
           brain.holdUntil = null;
@@ -389,8 +610,14 @@ const AI = (() => {
             brain.holdUntil = sim.time + 0.3 + Math.random() * 2.2;
           }
           if (sim.time >= brain.holdUntil) {
-            inp.pass = true;
-            brain.holdUntil = null;
+            if (!lethalForTeammate) {
+              inp.pass = true;
+              brain.holdUntil = null;
+            } else {
+              // Do not dump a known lethal bomb on a teammate. Keep looking
+              // for Reverse/Reinforced Arm while accepting the personal risk.
+              brain.holdUntil = sim.time + 0.5;
+            }
           }
         }
       }
@@ -399,9 +626,15 @@ const AI = (() => {
     } else {
       brain.holdUntil = null;
       brain.dodge = null;
-      inp.mx = bombPos.x;
-      inp.my = bombPos.y;
-      useFreeHandItem(sim, player, brain, inp);
+      if (bombVisible) {
+        inp.mx = bombPos.x;
+        inp.my = bombPos.y;
+      } else {
+        aimIntoDarkness(sim, player, brain, inp);
+      }
+      if (!continueSling(sim, player, brain, inp, bombPos)) {
+        useFreeHandItem(sim, player, brain, inp);
+      }
     }
 
     return inp;

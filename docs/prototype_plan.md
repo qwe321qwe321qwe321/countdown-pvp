@@ -555,7 +555,7 @@ StartingCoins = 0
 * -1s Gun
 * -3s Gun
 * -5s Gun
-* +5s Repair Kit
+* +3s Repair Kit
 * +10s Repair Kit
 * Speed Up Stopwatch
 * Slow Down Stopwatch
@@ -674,7 +674,7 @@ Card 仍然消耗。
 * -1s Gun
 * -3s Gun
 * -5s Gun
-* +5s Repair Kit
+* +3s Repair Kit
 * +10s Repair Kit
 * Speed Up Stopwatch
 * Slow Down Stopwatch
@@ -773,7 +773,7 @@ Bomb Collider
 
 共有：
 
-* +5s Repair Kit
+* +3s Repair Kit
 * +10s Repair Kit
 
 任何存活玩家：
@@ -1442,7 +1442,7 @@ Card UI 必須清楚顯示：
 * -1s
 * -3s
 * -5s
-* +5s
+* +3s
 * +10s
 * Speed ×2
 * Speed ×0.5
