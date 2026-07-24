@@ -20,7 +20,10 @@ const Host = (() => {
     let nextBotNum = 1;
     let pool = C.DefaultBombTimePool.slice();
     let teamCount = C.DefaultTeamCount;
-    let modes = { publicSeconds: false, doubleBomb: false, roguelikeShop: false };
+    let modes = {
+      publicSeconds: false, doubleBomb: false, roguelikeShop: false,
+      wobblyHitscan: false,
+    };
     let started = false;
     let sim = null;
     let tickTimer = null;
@@ -147,6 +150,7 @@ const Host = (() => {
         publicSeconds: !!(nextModes && nextModes.publicSeconds),
         doubleBomb: !!(nextModes && nextModes.doubleBomb),
         roguelikeShop: !!(nextModes && nextModes.roguelikeShop),
+        wobblyHitscan: !!(nextModes && nextModes.wobblyHitscan),
       };
       lobbyChanged();
     }

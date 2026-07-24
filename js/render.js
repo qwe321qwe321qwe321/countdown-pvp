@@ -123,7 +123,7 @@ const Render = (() => {
       // charge-up are public so living players can read and react to the
       // incoming interference rather than being blindsided.
       if (p.chargedWeapon && (!p.alive || p.deadWeaponCharging)) {
-        drawDeadWeaponPose(ctx, p, cx, cy);
+        drawDeadWeaponPose(ctx, p, cx, cy, snap);
       }
 
       // Everyone can see *that* a player is using a Magnifying Glass, and
@@ -201,6 +201,11 @@ const Render = (() => {
     // uses the live aim point in sim.js; this simply makes the selected player
     // and bomb trajectory unmistakable before SPACE is pressed.
     if (reinforcedThrow) drawReinforcedThrowArrow(ctx, reinforcedThrow, snap);
+
+    // Hitscan trails exist only for a fraction of a second, but snapshots
+    // carry their authoritative start/end points so every client sees the
+    // exact ray that hit (or missed) instead of a travelling bullet.
+    for (const trail of snap.shotTrails || []) drawHitscanTrail(ctx, trail, snap.time);
 
     // Projectiles: red = minus-time, green = plus-time; a flying grapple is
     // a claw head trailing its cable back to where it was thrown from.
@@ -321,7 +326,90 @@ const Render = (() => {
     }
 
     drawBlackout(ctx, snap, myId);
+    drawWobblyCrosshair(ctx, snap, myId);
     drawOverlays(ctx, snap);
+  }
+
+  function drawHitscanTrail(ctx, trail, time) {
+    const age = Math.max(0, time - trail.time);
+    if (age > C.HitscanTrailDuration) return;
+    const life = 1 - age / C.HitscanTrailDuration;
+    const charged = trail.weapon === "charged";
+    const color = charged ? "210,130,255" : "255,92,76";
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.globalCompositeOperation = "lighter";
+    ctx.beginPath();
+    ctx.moveTo(trail.x0, trail.y0);
+    ctx.lineTo(trail.x1, trail.y1);
+    ctx.lineWidth = 9 * life + 2;
+    ctx.strokeStyle = `rgba(${color},${0.16 * life})`;
+    ctx.shadowColor = `rgba(${color},${0.85 * life})`;
+    ctx.shadowBlur = 18;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(trail.x0, trail.y0);
+    ctx.lineTo(trail.x1, trail.y1);
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = `rgba(255,245,225,${0.95 * life})`;
+    ctx.stroke();
+
+    if (trail.impact !== "wall") {
+      ctx.beginPath();
+      ctx.arc(trail.x1, trail.y1, 4 + (1 - life) * 12, 0, Math.PI * 2);
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = `rgba(${color},${0.9 * life})`;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function aimedDirection(p, cx, cy, snap) {
+    let dx = p.aimX != null ? p.aimX - p.x : cx - p.x;
+    let dy = p.aimY != null ? p.aimY - p.y : cy - p.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len;
+    dy /= len;
+    const wobble = p.aimInstability > 0
+      ? HitscanAim.wobbleRadians(p.id, snap.time, p.aimInstability)
+      : 0;
+    return HitscanAim.rotate(dx, dy, wobble);
+  }
+
+  function drawWobblyCrosshair(ctx, snap, myId) {
+    if (!(snap.modes && snap.modes.wobblyHitscan)) return;
+    const me = snap.players.find(p => p.id === myId);
+    if (!me || !(me.aimInstability > 0) || me.aimX == null) return;
+
+    const rawX = me.aimX - me.x, rawY = me.aimY - me.y;
+    const distance = Math.hypot(rawX, rawY);
+    if (distance < 0.001) return;
+    const direction = aimedDirection(me, C.WorldWidth / 2, C.WorldHeight / 2, snap);
+    const x = me.x + direction.x * distance;
+    const y = me.y + direction.y * distance;
+    const pulse = 0.5 + 0.5 * Math.sin(snap.time * 18);
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.strokeStyle = "rgba(255,238,205,0.95)";
+    ctx.fillStyle = "rgba(255,92,76,0.95)";
+    ctx.lineWidth = 2;
+    ctx.shadowColor = "rgba(255,92,76,0.8)";
+    ctx.shadowBlur = 7;
+    const inner = 5 + pulse * 1.5;
+    const outer = 13 + pulse * 2;
+    ctx.beginPath();
+    ctx.moveTo(-outer, 0); ctx.lineTo(-inner, 0);
+    ctx.moveTo(outer, 0); ctx.lineTo(inner, 0);
+    ctx.moveTo(0, -outer); ctx.lineTo(0, -inner);
+    ctx.moveTo(0, outer); ctx.lineTo(0, inner);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   // Local timing windows use color only. No window names or failure text are
@@ -530,14 +618,8 @@ const Render = (() => {
   // arm pointing toward their aim, tipped with a small weapon marker. Purely
   // cosmetic — the actual shot only fires once they click.
   function drawWeaponPose(ctx, p, cx, cy, snap) {
-    let dx, dy;
-    if (p.aimX != null) {
-      dx = p.aimX - p.x; dy = p.aimY - p.y;
-    } else {
-      dx = cx - p.x; dy = cy - p.y;
-    }
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
+    const direction = aimedDirection(p, cx, cy, snap);
+    const dx = direction.x, dy = direction.y;
     const col = colorFor(p, snap);
     const hx = p.x + dx * (C.PlayerBodyRadius + 18);
     const hy = p.y + dy * (C.PlayerBodyRadius + 18);
@@ -565,11 +647,9 @@ const Render = (() => {
     ctx.restore();
   }
 
-  function drawDeadWeaponPose(ctx, p, cx, cy) {
-    let dx = p.aimX != null ? p.aimX - p.x : cx - p.x;
-    let dy = p.aimY != null ? p.aimY - p.y : cy - p.y;
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
+  function drawDeadWeaponPose(ctx, p, cx, cy, snap) {
+    const direction = aimedDirection(p, cx, cy, snap);
+    const dx = direction.x, dy = direction.y;
     const hx = p.x + dx * (C.PlayerBodyRadius + 20);
     const hy = p.y + dy * (C.PlayerBodyRadius + 20);
 

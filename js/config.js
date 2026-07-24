@@ -111,6 +111,17 @@ const CONFIG = {
   Gun1FireInterval: 0.09,
   AimLineLength: 520,                     // how far a wielded weapon's sight line reaches
 
+  // ---- Experimental wobbly hitscan ----
+  // Firearms and the universal charged shot become instantaneous rays. Their
+  // original time between shots determines how unstable they are: slower
+  // weapons visibly wander farther and also receive a wider per-shot error.
+  HitscanWobbleBaseDegrees: 1.5,
+  HitscanWobblePerSecond: 20,
+  HitscanWobbleMaxDegrees: 18,
+  HitscanRandomSpreadMultiplier: 0.45,
+  HitscanTrailDuration: 0.22,
+  HitscanTrailMaxCount: 96,
+
   // ---- Universal charged sling shot ----
   ChargedShotMinimumChargeTime: 1.0,        // release before this cancels; at this point the shot is one-third speed
   ChargedShotChargeTime: 2.0,               // full charge reaches ChargedProjectileSpeed

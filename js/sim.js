@@ -208,6 +208,7 @@ const Sim = (() => {
       publicSeconds: !!(requestedModes && requestedModes.publicSeconds),
       doubleBomb: !!(requestedModes && requestedModes.doubleBomb),
       roguelikeShop: !!(requestedModes && requestedModes.roguelikeShop),
+      wobblyHitscan: !!(requestedModes && requestedModes.wobblyHitscan),
     };
     const sim = {
       seatCount: roster.length,
@@ -262,6 +263,8 @@ const Sim = (() => {
       projectiles: [],
       nextProjId: 1,
       nextShotGroup: 1,
+      shotTrails: [],
+      nextShotTrailId: 1,
       events: [],
       eventSeq: 0,
       // Positioned, purely-visual one-shot effects (e.g. a fake bomb's
@@ -342,6 +345,7 @@ const Sim = (() => {
         : null,
     };
     sim.projectiles = [];
+    sim.shotTrails = [];
     sim.fakeBombs = [];
     if (sim.modes.doubleBomb && alive.length >= 4) {
       const candidates = alive.filter(p => !target || p.id !== target.id);
@@ -1011,9 +1015,9 @@ const Sim = (() => {
         // been thrown and is in flight, their hands are free again even
         // though ownership hasn't formally changed yet.
         if (holdsAnyBomb(sim, p)) return;
-        // Real 2D projectiles (never hitscan), fired from the player's hand
-        // toward their current mouse aim. Repair kits are single throws;
-        // guns delegate to their own magazine/spread/cooldown behavior.
+        // Repair kits remain physical throws. Gun cards delegate to their own
+        // magazine/spread/cooldown behavior and become instantaneous rays only
+        // when the experimental wobbly-hitscan mode is enabled.
         if (def.amount < 0) {
           fireGunRound(sim, p, slot);
         } else {
@@ -1130,11 +1134,23 @@ const Sim = (() => {
     if (def.gunStyle === "shotgun") {
       const spread = C.Gun3SpreadDegrees * Math.PI / 180;
       const groupId = sim.nextShotGroup++;
+      const groupedHits = [];
       for (const offset of [-spread, 0, spread]) {
-        fireProjectile(sim, p, def.amount, C.ProjectileSpeed, offset, groupId);
+        if (sim.modes.wobblyHitscan) {
+          const hit = fireHitscan(sim, p, cardId, def.amount, offset, true);
+          if (hit) groupedHits.push(hit);
+        } else {
+          fireProjectile(sim, p, def.amount, C.ProjectileSpeed, offset, groupId);
+        }
+      }
+      if (groupedHits.length) {
+        const amount = groupedHits.reduce((sum, hit) => sum + hit.amount, 0);
+        const at = groupedHits[0];
+        if (amount) addEvent(sim, `${amount} SEC`, at.x, at.y);
       }
     } else {
-      fireProjectile(sim, p, def.amount, C.ProjectileSpeed);
+      if (sim.modes.wobblyHitscan) fireHitscan(sim, p, cardId, def.amount);
+      else fireProjectile(sim, p, def.amount, C.ProjectileSpeed);
     }
     pending.shotsLeft--;
     pending.nextShotAt = sim.time + gunCooldown(def);
@@ -1173,6 +1189,138 @@ const Sim = (() => {
       vy: dy * projectileSpeed,
       shotGroup: shotGroup || null,
     });
+  }
+
+  // Distance from a ray origin to the first intersection with a circle.
+  // Returns null when the circle is behind the ray or the ray misses it.
+  function rayCircleDistance(origin, dx, dy, center, radius) {
+    const rx = center.x - origin.x, ry = center.y - origin.y;
+    const forward = rx * dx + ry * dy;
+    const perpendicularSq = rx * rx + ry * ry - forward * forward;
+    const radiusSq = radius * radius;
+    if (perpendicularSq > radiusSq) return null;
+    const halfChord = Math.sqrt(Math.max(0, radiusSq - perpendicularSq));
+    const near = forward - halfChord;
+    const far = forward + halfChord;
+    if (far < 0) return null;
+    return Math.max(0, near);
+  }
+
+  function rayWallDistance(origin, dx, dy) {
+    const distances = [];
+    if (dx > 0) distances.push((C.WorldWidth - origin.x) / dx);
+    else if (dx < 0) distances.push((0 - origin.x) / dx);
+    if (dy > 0) distances.push((C.WorldHeight - origin.y) / dy);
+    else if (dy < 0) distances.push((0 - origin.y) / dy);
+    return Math.min(...distances.filter(value => value >= 0));
+  }
+
+  function addShotTrail(sim, from, to, amount, weapon, impact) {
+    sim.shotTrails.push({
+      id: sim.nextShotTrailId++,
+      x0: from.x, y0: from.y, x1: to.x, y1: to.y,
+      amount, weapon, impact, time: sim.time,
+    });
+    if (sim.shotTrails.length > C.HitscanTrailMaxCount) sim.shotTrails.shift();
+  }
+
+  // Resolve one firearm/sling ray immediately on the authoritative host.
+  // The deterministic wobble is visible before firing; a second random angle
+  // is deliberately unknowable and is rolled for every individual pellet.
+  function fireHitscan(sim, p, weaponId, amount, angleOffset, suppressRealEvent) {
+    const seat = seatPosition(p.seat, sim.seatCount);
+    let dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
+    const aimLength = Math.hypot(dx, dy);
+    if (aimLength < 0.001) { dx = 0; dy = -1; }
+    else { dx /= aimLength; dy /= aimLength; }
+
+    const instability = HitscanAim.instabilityDegrees(weaponId, sim.players.length);
+    const wobble = HitscanAim.wobbleRadians(p.id, sim.time, instability);
+    const randomSpread = (Math.random() * 2 - 1) * instability *
+      C.HitscanRandomSpreadMultiplier * Math.PI / 180;
+    const direction = HitscanAim.rotate(dx, dy,
+      wobble + (angleOffset || 0) + randomSpread);
+    dx = direction.x;
+    dy = direction.y;
+
+    const origin = {
+      x: seat.x + dx * C.MuzzleOffset,
+      y: seat.y + dy * C.MuzzleOffset,
+    };
+    let nearest = {
+      type: "wall",
+      distance: rayWallDistance(origin, dx, dy),
+      target: null,
+    };
+    const consider = (type, target, center, radius) => {
+      const distance = rayCircleDistance(origin, dx, dy, center, radius);
+      if (distance != null && distance < nearest.distance) {
+        nearest = { type, target, center, distance };
+      }
+    };
+
+    const bubble = shieldBubble(sim);
+    const shieldOwner = sim.bomb && sim.bomb.shieldOwnerId;
+    if (bubble && p.id !== shieldOwner) {
+      consider("shield", null, bubble, C.BombArmReach);
+    }
+    const bombPos = bombWorldPos(sim);
+    if (sim.bomb && sim.bomb.holderId) {
+      consider("real", sim.bomb, bombPos, C.BombRadius + C.ProjectileRadius);
+    }
+    for (const fake of sim.fakeBombs) {
+      consider("fake", fake, fakeWorldPos(sim, fake),
+        C.BombRadius + C.ProjectileRadius);
+    }
+
+    const impact = {
+      x: origin.x + dx * nearest.distance,
+      y: origin.y + dy * nearest.distance,
+    };
+    addShotTrail(sim, origin, impact, amount, weaponId, nearest.type);
+
+    if (nearest.type === "wall") return null;
+    if (nearest.type === "shield") {
+      addEvent(sim, "SHIELD BLOCKED IT", impact.x, impact.y);
+      return null;
+    }
+
+    if (nearest.type === "fake") {
+      nearest.target.remaining += amount;
+      addEvent(sim, `${amount > 0 ? "+" : ""}${amount} SEC`,
+        nearest.center.x, nearest.center.y);
+      return null;
+    }
+
+    const b = sim.bomb;
+    if (shieldCoversBomb(sim)) {
+      addEvent(sim, "SHIELD BLOCKED IT", bombPos.x, bombPos.y);
+      return null;
+    }
+    if (amount < 0) {
+      const stolen = Math.min(C.BombBulletCoinLoss, b.pot);
+      if (stolen > 0) {
+        b.pot -= stolen;
+        p.coins += stolen;
+        addEffect(sim, "coinstolen", bombPos.x, bombPos.y, {
+          receiverId: p.id,
+          amount: stolen,
+        });
+      }
+    }
+    if (b.speedMult === 0 && b.speedRemaining > 0) {
+      addEvent(sim, "FROZEN — NO EFFECT", bombPos.x, bombPos.y);
+      return null;
+    }
+
+    b.remaining += amount;
+    if (!suppressRealEvent) {
+      addEvent(sim, `${amount > 0 ? "+" : ""}${amount} SEC`,
+        bombPos.x, bombPos.y);
+    }
+    return suppressRealEvent
+      ? { amount, x: bombPos.x, y: bombPos.y }
+      : null;
   }
 
   // Grapple Claw: a fast outbound throw tagged isClaw so stepProjectiles()
@@ -1432,10 +1580,9 @@ const Sim = (() => {
   // Eliminated players retain it permanently; living players temporarily put
   // it away while holding a bomb, revealing, or wielding a card weapon.
   // Releasing before the one-second minimum loses the charge. From one to two
-  // seconds, projectile speed scales linearly from half to full speed; a full
-  // charge stays primed while held. After releasing, charging can begin again.
-  // Because fireProjectile and collision are shared with card guns, shields,
-  // frozen bombs, fake bombs and walls all react through the same rules.
+  // seconds, projectile speed scales linearly from one-third to full speed; a
+  // full charge stays primed while held. In the hitscan experiment its charge
+  // timing is retained but release resolves as an instant unstable ray.
   function stepChargedWeapons(sim, inputs, dt) {
     for (const p of sim.players) {
       if (p.disconnected) continue;
@@ -1467,7 +1614,11 @@ const Sim = (() => {
           (1 - C.ChargedProjectileMinSpeedMultiplier) * speedProgress;
         const projectileSpeed = C.ChargedProjectileSpeed * speedMultiplier;
         p.deadWeaponCharge = 0;
-        fireProjectile(sim, p, C.ChargedShotAmount, projectileSpeed);
+        if (sim.modes.wobblyHitscan) {
+          fireHitscan(sim, p, "charged", C.ChargedShotAmount);
+        } else {
+          fireProjectile(sim, p, C.ChargedShotAmount, projectileSpeed);
+        }
         addEvent(sim, `${p.name} launched a charged shot`);
       } else {
         p.deadWeaponCharge = 0;
@@ -1640,6 +1791,8 @@ const Sim = (() => {
 
     if (stepFakeBombs(sim, dt, true)) return;
     stepProjectiles(sim, dt);
+    sim.shotTrails = sim.shotTrails.filter(
+      trail => sim.time - trail.time <= C.HitscanTrailDuration);
 
     if (b.remaining <= 0) explode(sim);
   }
@@ -1981,6 +2134,11 @@ const Sim = (() => {
           p.holdElapsed >= C.BombHolderCoinDuration && b.pot < C.BombHolderPotCap);
         const chargedWeapon = !p.disconnected &&
           (!p.alive || (!handsFullNow && !equipped && !revealing));
+        const equippedCardId = equipped ? p.hand[p.equippedSlot] : null;
+        const hitscanWeaponId = equippedCardId &&
+          Cards.TYPES[equippedCardId].amount < 0
+          ? equippedCardId
+          : (chargedWeapon ? "charged" : null);
         return {
           id: p.id, name: p.name, seat: p.seat, team: p.team, x: seat.x, y: seat.y, alive: p.alive,
           equipped,                          // wielding a throwable/gun card — visible to everyone
@@ -1994,6 +2152,9 @@ const Sim = (() => {
           // the private reading it gives its owner.
           aimX: (equipped || revealing || chargedWeapon) ? p.aim.x : null,
           aimY: (equipped || revealing || chargedWeapon) ? p.aim.y : null,
+          aimInstability: sim.modes.wobblyHitscan && hitscanWeaponId
+            ? HitscanAim.instabilityDegrees(hitscanWeaponId, sim.players.length)
+            : 0,
           revealing,                         // using a Magnifying Glass right now — visible to everyone (not the reading itself)
           // Also stays active while restoring coins stolen from an already
           // maxed real-bomb pot, even after the normal farming window.
@@ -2067,6 +2228,7 @@ const Sim = (() => {
         x: pr.x, y: pr.y, amount: pr.amount, isClaw: !!pr.isClaw,
         ox: pr.isClaw ? pr.ox : undefined, oy: pr.isClaw ? pr.oy : undefined,
       })),
+      shotTrails: sim.shotTrails.map(trail => Object.assign({}, trail)),
       events: sim.events.slice(-30),
       effects: sim.effects.slice(-16),
     };

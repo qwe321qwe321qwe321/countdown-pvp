@@ -3,7 +3,8 @@
 Implementation of `docs/prototype_plan.md`: a 2D top-down, Liar's-Bar-style PvP prototype.
 All players sit **fixed in their seats around a table for the entire match** — there is no
 movement or HP. The physical interaction is mouse-controlled arms moving the bomb,
-real 2D projectiles, a charged sling shot, and an automatic coin → card economy.
+real 2D projectiles (or optional unstable hitscan), a charged sling shot, and
+an automatic coin → card economy.
 
 ## Run
 
@@ -34,7 +35,7 @@ by everyone: Magnifying Glass, one attack card, one defense card, and one other
 non-duplicate random card. The right-side codex shows the current round's pool.
 Each player opens with a Magnifying Glass and that opening pool's attack card.
 
-The host lobby also exposes three experimental switches:
+The host lobby also exposes four experimental switches:
 
 - **Public seconds** keeps every lethal/decoy timer visible and removes the
   Magnifying Glass from starting hands and card rolls.
@@ -45,6 +46,11 @@ The host lobby also exposes three experimental switches:
   personal choices plus a paid reroll in slot 4. Choosing a card costs
   `CardDrawCost`; after it is consumed, that slot immediately rolls a new card
   from every enabled card rather than the round Shop Pool.
+- **Wobbly hitscan weapons** makes firearm rounds and the universal charged
+  shot resolve instantly. Their original firing cycle controls sight wobble
+  (slower weapons wander farther), and every ray receives additional random
+  spread. A short authoritative trail shows its exact path. Bomb passes,
+  repair-kit throws, and Grapple Claws remain moving projectiles.
 
 ## Architecture (host authoritative)
 
@@ -59,6 +65,8 @@ the result with an opaque transfer id, so network round-trip latency cannot spoi
   Nothing gameplay-relevant is hardcoded elsewhere.
 - `js/cards.js` — card definitions including the three distinct firearms, repair kits,
   global timer effects, Shield, Reverse, and the weighted shop roll.
+- `js/aim.js` — the shared deterministic sight-wobble model used by both the
+  authoritative hitscan resolver and client rendering.
 - `js/sim.js` — the authoritative state machine: bomb-time-pool draw → initial time reveal →
   3-2-1 → hidden timer → random holder → passing/cards/projectiles → explosion → elimination
   → next bomb → last survivor wins, plus `buildSnapshot()` (the only view clients ever get).
@@ -90,10 +98,12 @@ the result with an opaque transfer id, so network round-trip latency cannot spoi
 - **Bomb arm control**: the holder sends only a mouse position; the host computes the bomb
   offset and clamps it to `BombArmReach`. The bomb collider genuinely moves — it can dodge
   shots, catch repair kits, or hide behind the holder's body.
-- **Projectiles**: every gun/repair card fires a real moving projectile (no hitscan).
-  Firearm rounds travel faster than the charged sling shot. The -5s gun is a three-round
-  semi-auto, the -3s shotgun has one three-pellet shell, and the -1s machine gun has a
-  ten-round hold-to-fire magazine.
+- **Shots and projectiles**: normally every gun/repair card fires a real moving
+  projectile. In Wobbly Hitscan mode, firearms and charged shots become
+  instantaneous host-resolved rays with visible trails, aim wobble, and random
+  spread; thrown tools and bombs still travel. The -5s gun is a three-round
+  semi-auto, the -3s shotgun has one three-pellet shell, and the -1s machine
+  gun has a ten-round hold-to-fire magazine.
 - **Time rules**: reductions clamp at `MinimumBombTimeAfterReduction` (never explode from a
   hit; natural countdown to 0 still does); no upper limit on bomb time.
 - **Speed modifiers**: Speed Up ×2 / Slow Down ×0.5 override each other completely — no

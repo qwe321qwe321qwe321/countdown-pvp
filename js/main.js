@@ -267,7 +267,13 @@
 
     const armedNow = armedSlot != null && you && you.alive && snap.phase === "playing" && !iAmHolder;
     if (armedNow) {
-      outMe = Object.assign({}, me, { equipped: true, aimX: mouse.x, aimY: mouse.y });
+      const armedCardId = you.hand[armedSlot];
+      const aimInstability = snap.modes && snap.modes.wobblyHitscan
+        ? HitscanAim.instabilityDegrees(armedCardId, snap.players.length)
+        : 0;
+      outMe = Object.assign({}, me, {
+        equipped: true, aimX: mouse.x, aimY: mouse.y, aimInstability,
+      });
     } else if (!chargeAiming && (me.equipped || me.revealing)) {
       outMe = Object.assign({}, me, { aimX: mouse.x, aimY: mouse.y });
     }
@@ -450,7 +456,12 @@
             reallyHolding || latestSnap.phase !== "playing")) {
         clearArmed();
       }
-      canvas.style.cursor = armedSlot != null ? "pointer" : "crosshair";
+      const localPlayer = latestSnap.players.find(p => p.id === myId);
+      const hideForWobblyAim = !!(latestSnap.modes && latestSnap.modes.wobblyHitscan &&
+        localPlayer && localPlayer.aimInstability > 0);
+      canvas.style.cursor = hideForWobblyAim
+        ? "none"
+        : (armedSlot != null ? "pointer" : "crosshair");
 
       // Host draws its own 60Hz sim raw. Clients draw the newest snapshot with
       // only the local player's own arm/aim predicted forward from the mouse.
@@ -536,7 +547,10 @@
     $("hostPlayerName").value = playerName();
     buildPoolChecks();
     buildTeamCountSelect();
-    syncModeChecks({ publicSeconds: false, doubleBomb: false, roguelikeShop: false });
+    syncModeChecks({
+      publicSeconds: false, doubleBomb: false, roguelikeShop: false,
+      wobblyHitscan: false,
+    });
   };
 
   $("hostPlayerName").addEventListener("input", () => {
@@ -580,6 +594,7 @@
       publicSeconds: $("modePublicSeconds").checked,
       doubleBomb: $("modeDoubleBomb").checked,
       roguelikeShop: $("modeRoguelikeShop").checked,
+      wobblyHitscan: $("modeWobblyHitscan").checked,
     };
   }
 
@@ -588,9 +603,12 @@
     $("modePublicSeconds").checked = !!modes.publicSeconds;
     $("modeDoubleBomb").checked = !!modes.doubleBomb;
     $("modeRoguelikeShop").checked = !!modes.roguelikeShop;
+    $("modeWobblyHitscan").checked = !!modes.wobblyHitscan;
   }
 
-  for (const id of ["modePublicSeconds", "modeDoubleBomb", "modeRoguelikeShop"]) {
+  for (const id of [
+    "modePublicSeconds", "modeDoubleBomb", "modeRoguelikeShop", "modeWobblyHitscan",
+  ]) {
     $(id).onchange = () => {
       if (hostSession) hostSession.setModes(selectedModes());
     };
@@ -662,6 +680,7 @@
         if (modes.publicSeconds) labels.push("Public seconds");
         if (modes.doubleBomb) labels.push("Double bomb");
         if (modes.roguelikeShop) labels.push("Roguelike shop");
+        if (modes.wobblyHitscan) labels.push("Wobbly hitscan");
         $("clientTeamInfo").textContent = labels.join(" · ");
       },
       onStart: enterGame,
