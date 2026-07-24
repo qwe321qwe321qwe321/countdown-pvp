@@ -14,6 +14,10 @@ const CONFIG = {
   BaseMinimumHoldTime: 0,                 // no forced hold before an uncursed bomb can be passed again
   CurseMinimumHoldTime: 5.0,              // pass lock when receiving a cursed bomb
   BombPassSpeed: 300,                     // world units/sec the bomb travels while mid-pass between seats
+  ParryPunishWindow: 0.35,                // local-only no-press window immediately before the parry window
+  ParryWindow: 0.20,                      // local-only SPACE timing window at the end of an incoming pass
+  ParrySpeedMultiplier: 1.5,              // successful returns multiply the exact incoming travel speed
+  ParryResultGrace: 5.0,                  // host accepts a locally judged result this long after arrival
   PublicTimeRevealDuration: 5.0,         // real seconds, right after gameplay starts, the timer is shown to everyone
 
   // ---- Speed modifiers (override, never stack) ----

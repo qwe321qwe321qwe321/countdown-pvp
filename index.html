@@ -88,6 +88,10 @@
     </div>
     <div class="panel">
       <h2>Seats</h2>
+      <div class="row" style="margin-bottom:8px">
+        <label for="hostPlayerName">Your name:</label>
+        <input type="text" id="hostPlayerName" placeholder="Your name" maxlength="16">
+      </div>
       <div class="seat-list" id="hostSeatList"></div>
       <div class="row">
         <button id="btnAddBot">Add Bot</button>
@@ -122,8 +126,16 @@
   <div id="screen-client-lobby" class="screen">
     <div class="panel">
       <h2>Waiting for host to start…</h2>
+      <div class="row" style="margin-bottom:8px">
+        <label for="clientPlayerName">Your name:</label>
+        <input type="text" id="clientPlayerName" placeholder="Your name" maxlength="16">
+        <span id="clientConnectStatus" style="color:#9aa1ad"></span>
+      </div>
       <div class="seat-list" id="clientSeatList"></div>
       <div id="clientTeamInfo" style="margin-top:8px; font-size:13px; color:#9aa1ad"></div>
+      <div class="row" style="margin-top:12px">
+        <button id="btnLeaveLobby">Leave</button>
+      </div>
     </div>
   </div>
 
@@ -185,14 +197,14 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <!-- ?v= cache-buster: bump it whenever the game scripts change, so nobody
      plays a stale mix of old and new code out of the browser cache. -->
-<script src="js/config.js?v=9"></script>
-<script src="js/cards.js?v=9"></script>
-<script src="js/sim.js?v=9"></script>
-<script src="js/ai.js?v=9"></script>
-<script src="js/net.js?v=9"></script>
-<script src="js/host.js?v=9"></script>
-<script src="js/client.js?v=9"></script>
-<script src="js/render.js?v=9"></script>
-<script src="js/main.js?v=9"></script>
+<script src="js/config.js?v=10"></script>
+<script src="js/cards.js?v=10"></script>
+<script src="js/sim.js?v=10"></script>
+<script src="js/ai.js?v=10"></script>
+<script src="js/net.js?v=10"></script>
+<script src="js/host.js?v=10"></script>
+<script src="js/client.js?v=10"></script>
+<script src="js/render.js?v=10"></script>
+<script src="js/main.js?v=10"></script>
 </body>
 </html>

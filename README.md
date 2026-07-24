@@ -23,7 +23,7 @@ host lobby and play solo for testing.
 | Input | Effect |
 | --- | --- |
 | Mouse | Holding the bomb: drag your arms. Hold left mouse to taunt, lock arm control/passing, and farm the pot at 2× speed. With free hands: hold/release to charge and launch a slower -3s sling shot. |
-| Space | Pass the bomb to the next alive player in seat order (once `PASS LOCK` reaches 0) |
+| Space | Pass while holding; on an incoming pass, avoid the punish window and press in the parry window to return it at 1.5× incoming travel speed |
 | 1 / 2 / 3 (or click) | Use the card in that hand slot |
 | Q after elimination | Use your one randomly assigned global item for the round |
 
@@ -35,9 +35,11 @@ Each player opens with a Magnifying Glass and that opening pool's attack card.
 
 ## Architecture (host authoritative)
 
-One browser (the host) runs the entire simulation; every other browser only sends inputs
-(`{mouse, pass, use, primaryFire, gunFireSlot}`) and renders the snapshot the host sends
-back. Clients never decide hits, bomb time changes, deaths, purchases, or rewards.
+One browser (the host) runs the simulation; every other browser sends inputs
+(`{mouse, pass, parry, use, primaryFire, gunFireSlot}`) and renders the snapshot the host sends
+back. Clients never decide hits, bomb time changes, deaths, purchases, or rewards. Parry/punish
+timing is the deliberate exception: each receiving client judges its own local window and sends
+the result with an opaque transfer id, so network round-trip latency cannot spoil the timing.
 
 - `js/config.js` — every tunable number from the plan (`BombArmReach`, `BaseMinimumHoldTime`,
   `MinimumBombTimeAfterReduction`, speed/shield/curse durations, coin rates, drop weights…).
@@ -66,6 +68,11 @@ back. Clients never decide hits, bomb time changes, deaths, purchases, or reward
   gated by `BaseMinimumHoldTime` pass lock; Curse defers a `CurseMinimumHoldTime` lock onto
   the *next* receiver, then clears. Reverse toggles the entire order until toggled again or
   the round ends.
+- **Local parry timing**: an incoming ordinary pass exposes a local punish window followed by
+  a parry window. Pressing in punish locks out that transfer; pressing in parry immediately
+  returns it at incoming speed ×1.5. Consecutive returns compound (1.5×, 2.25×, 3.375×…).
+  The host validates the receiver and transfer id, and accepts a short late result only while
+  that exact bomb is still in the receiver's hands.
 - **Bomb arm control**: the holder sends only a mouse position; the host computes the bomb
   offset and clamps it to `BombArmReach`. The bomb collider genuinely moves — it can dodge
   shots, catch repair kits, or hide behind the holder's body.

@@ -105,6 +105,9 @@ const Render = (() => {
         ctx.textAlign = "center";
         ctx.fillText("✖", p.x, p.y + 7);
       }
+      if (p.id === myId && snap.you && snap.you.parry) {
+        drawLocalTimingCue(ctx, p, snap.you.parry, snap.time);
+      }
       ctx.font = "12px sans-serif";
       ctx.textAlign = "center";
       ctx.fillStyle = aliveLook ? "#e8e8e8" : "#767e8a";
@@ -312,6 +315,71 @@ const Render = (() => {
 
     drawBlackout(ctx, snap, myId);
     drawOverlays(ctx, snap);
+  }
+
+  // Local timing windows use color only. No window names or failure text are
+  // shown; only a successful trigger gets a brief confirmation in
+  // drawOverlays().
+  function drawLocalTimingCue(ctx, player, timing, time) {
+    if (timing.state === "punished" || timing.state === "missed") return;
+    const pulse = 0.5 + 0.5 * Math.sin(time * 18);
+    const styles = {
+      incoming:  { color: "190,200,214", alpha: 0.32, width: 3 },
+      punish:    { color: "255,70,82",   alpha: 0.78, width: 5 },
+      parry:     { color: "105,255,150", alpha: 0.92, width: 6 },
+      success:   { color: "80,235,255",  alpha: 0.95, width: 7 },
+    };
+    const style = styles[timing.state] || styles.incoming;
+    const radius = C.PlayerBodyRadius + 10 + pulse * (timing.state === "parry" ? 7 : 3);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
+    ctx.lineWidth = style.width;
+    ctx.strokeStyle = `rgba(${style.color},${style.alpha})`;
+    ctx.shadowColor = `rgba(${style.color},${style.alpha})`;
+    ctx.shadowBlur = timing.state === "parry" || timing.state === "success" ? 18 : 8;
+    ctx.stroke();
+    if (timing.state === "success") {
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, radius + 10 + pulse * 9, 0, Math.PI * 2);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = `rgba(${style.color},${0.55 - pulse * 0.25})`;
+      ctx.stroke();
+      drawParryBurstParticles(ctx, player, timing);
+    }
+    ctx.restore();
+  }
+
+  function drawParryBurstParticles(ctx, player, timing) {
+    const duration = 0.45;
+    const age = Math.max(0, timing.successAge || 0);
+    if (age >= duration) return;
+    const progress = age / duration;
+    const eased = 1 - Math.pow(1 - progress, 2.4);
+    const alpha = Math.pow(1 - progress, 1.35);
+    const seed = (timing.transferId || 1) * 0.61803398875;
+    const count = 18;
+
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + seed;
+      const stagger = 0.78 + ((i * 7) % 5) * 0.075;
+      const distance = 13 + eased * (46 + (i % 4) * 9) * stagger;
+      const sideDrift = Math.sin(progress * Math.PI) * ((i % 3) - 1) * 8;
+      const px = player.x + Math.cos(angle) * distance -
+        Math.sin(angle) * sideDrift;
+      const py = player.y + Math.sin(angle) * distance +
+        Math.cos(angle) * sideDrift;
+      const size = Math.max(1.2, (4.2 - (i % 3) * 0.65) * (1 - progress * 0.58));
+
+      ctx.beginPath();
+      ctx.arc(px, py, size, 0, Math.PI * 2);
+      ctx.fillStyle = i % 3 === 0
+        ? `rgba(255,255,255,${alpha})`
+        : i % 3 === 1
+          ? `rgba(100,244,255,${alpha})`
+          : `rgba(125,255,155,${alpha * 0.9})`;
+      ctx.fill();
+    }
   }
 
   // Background tint while a Speed Up/Slow Down modifier is active: a subtle
@@ -975,7 +1043,11 @@ const Render = (() => {
     // Pass UI — anyone holding a bomb (real or fake — same UI, same bluff)
     // needs it.
     const you = snap.you;
-    if (you && (you.isHolder || you.holdsFake || you.fakePassing) && snap.phase === "playing") {
+    if (you && you.parry && you.parry.state === "success" && snap.phase === "playing") {
+      ctx.font = "bold 26px sans-serif";
+      ctx.fillStyle = "#64f4ff";
+      ctx.fillText("PARRY!  SPEED ×1.5", cx, C.WorldHeight - 24);
+    } else if (you && (you.isHolder || you.holdsFake || you.fakePassing) && snap.phase === "playing") {
       ctx.font = "bold 24px sans-serif";
       if ((you.isHolder && snap.bomb && snap.bomb.transferring) || you.fakePassing) {
         ctx.fillStyle = "#c6cdd6";

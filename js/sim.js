@@ -4,7 +4,8 @@
 // every rule in docs/prototype_plan.md: bomb timer, holder, passing order,
 // pass lock, projectile collision, auto-purchases, shield, global effects, deaths.
 // It only ever advances through Sim.step(sim, inputsByPlayerId, dt), where an
-// input is plain data: { mx, my, pass, use: [slotIndex], primaryFire,
+// input is plain data: { mx, my, pass, parry: [{transferId,outcome}],
+// use: [slotIndex], primaryFire,
 // gunFireSlot }.
 // Clients never run this — they only send inputs and render snapshots.
 const Sim = (() => {
@@ -83,12 +84,12 @@ const Sim = (() => {
     return { x: seat.x + b.offset.x, y: seat.y + b.offset.y };
   }
 
-  // Shield is a personal bubble around the carrier, not a ring glued to the
-  // bomb. It covers the complete arm reach and stops protecting once the bomb
-  // is thrown outside that bubble or is mid-flight.
+  // Shield is a personal bubble around the player who activated it, not a ring
+  // glued to the bomb. It covers the complete arm reach, including while the
+  // bomb is in flight; protection depends only on whether the bomb is inside.
   function shieldCoversBomb(sim) {
     const b = sim.bomb;
-    if (!b || b.shieldRemaining <= 0 || !b.holderId || b.transfer) return false;
+    if (!b || b.shieldRemaining <= 0) return false;
     const owner = getPlayer(sim, b.shieldOwnerId);
     if (!owner) return false;
     return dist(bombWorldPos(sim), seatPosition(owner.seat, sim.seatCount)) <=
@@ -97,7 +98,7 @@ const Sim = (() => {
 
   function shieldBubble(sim) {
     const b = sim.bomb;
-    if (!b || b.shieldRemaining <= 0 || !b.shieldOwnerId || b.transfer) return null;
+    if (!b || b.shieldRemaining <= 0 || !b.shieldOwnerId) return null;
     const owner = getPlayer(sim, b.shieldOwnerId);
     return owner ? seatPosition(owner.seat, sim.seatCount) : null;
   }
@@ -207,6 +208,7 @@ const Sim = (() => {
         hand: freshHand(),  // fixed-size; card type ids or null for empty slots
         handSlotVersions: new Array(C.MaxHandSize).fill(0),
         autoBuyInputLocks: new Set(), // refilled slots require the old use/fire input to be released
+        resolvedParryIds: new Set(),  // deduplicates locally judged results for exact transfers
         passLock: 0,
         passiveAcc: 0,
         holderAcc: 0,
@@ -233,6 +235,8 @@ const Sim = (() => {
       // sim.bomb.holderId works, so the two are indistinguishable in play.
       fakeBombs: [],
       nextFakeId: 1,
+      nextTransferId: 1,
+      recentParryArrivals: [],
       projectiles: [],
       nextProjId: 1,
       nextShotGroup: 1,
@@ -309,6 +313,7 @@ const Sim = (() => {
     };
     sim.projectiles = [];
     sim.fakeBombs = [];
+    sim.recentParryArrivals = [];
     sim.effects = [];
     sim.explosionAt = null;
     sim.explosionVictimPos = null;
@@ -329,6 +334,7 @@ const Sim = (() => {
       p.deadWeaponCharge = 0;
       p.deadWeaponCharging = false;
       p.taunting = false;
+      p.resolvedParryIds.clear();
       // Eliminated players get a fresh ghost item each round, sitting right
       // in hand slot 1 like any other card — usable via the normal card UI.
       if (!p.alive) p.hand[0] = rollDeadGlobalItem();
@@ -353,6 +359,7 @@ const Sim = (() => {
       p.hand = freshHand();
       p.handSlotVersions = new Array(C.MaxHandSize).fill(0);
       p.autoBuyInputLocks.clear();
+      p.resolvedParryIds.clear();
       p.passLock = 0;
       p.passiveAcc = 0;
       p.holderAcc = 0;
@@ -373,6 +380,7 @@ const Sim = (() => {
     sim.roundNumber = 0;
     sim.roundCardPool = [];
     sim.seenRoundCardIds = [];
+    sim.recentParryArrivals = [];
     // Back to a clean opening: reveal phase, bomb travelling in from center.
     // Works whether the rematch was fired at match-over or mid-round.
     sim.phase = "reveal";
@@ -403,6 +411,116 @@ const Sim = (() => {
     return best;
   }
 
+  // Every ordinary throw gets an opaque id and carries its actual world
+  // speed. Clients use only the raw duration/remaining values to run the
+  // punish/parry clock locally; the host never judges which timing window a
+  // press landed in. Keeping speed on the transfer is what lets consecutive
+  // successful parries multiply the previous throw exactly.
+  function makePassTransfer(sim, fromId, toId, fromPos, toPos, speed) {
+    return {
+      id: sim.nextTransferId++,
+      fromId,
+      toId,
+      elapsed: 0,
+      duration: Math.max(0.001, dist(fromPos, toPos) / speed),
+      fromPos,
+      toPos,
+      speed,
+      parryable: true,
+      parryQueued: false,
+      parryDenied: false,
+    };
+  }
+
+  function rememberParryArrival(sim, transfer, bombLike) {
+    if (!transfer.parryable || transfer.parryQueued || transfer.parryDenied) return;
+    sim.recentParryArrivals.push({
+      transferId: transfer.id,
+      receiverId: transfer.toId,
+      incomingSpeed: transfer.speed,
+      duration: transfer.duration,
+      isFake: bombLike !== sim.bomb,
+      fakeId: bombLike === sim.bomb ? null : bombLike.id,
+      expiresAt: sim.time + C.ParryResultGrace,
+    });
+  }
+
+  function pruneParryArrivals(sim) {
+    sim.recentParryArrivals = sim.recentParryArrivals.filter(r => r.expiresAt > sim.time);
+  }
+
+  // Apply a client-local success at the receiver's seat. For an on-time
+  // result this runs as the incoming transfer lands; a delayed result may run
+  // during ParryResultGrace, but only while this exact bomb is still resting
+  // in the same receiver's hands.
+  function launchParry(sim, bombLike, receiver, incomingSpeed, fromPos, alreadyReceived) {
+    const next = nextAliveFrom(sim, receiver.seat);
+    if (!next || next === receiver) return false;
+
+    if (!alreadyReceived) {
+      if (bombLike === sim.bomb) {
+        giveBomb(sim, receiver);
+      } else {
+        bombLike.holderId = receiver.id;
+        bombLike.offset = { x: 0, y: 0 };
+        bombLike.pot = 0;
+        receiver.holderAcc = 0;
+        receiver.holdElapsed = 0;
+        receiver.passLock = C.BaseMinimumHoldTime;
+      }
+    }
+
+    const toPos = seatPosition(next.seat, sim.seatCount);
+    const speed = incomingSpeed * C.ParrySpeedMultiplier;
+    bombLike.holderId = receiver.id;
+    bombLike.pot = 0;
+    bombLike.transfer = makePassTransfer(sim, receiver.id, next.id, fromPos, toPos, speed);
+    return true;
+  }
+
+  // Results are already classified as success/punished by the player's local
+  // clock. The host verifies identity and transfer ownership only; it does not
+  // recalculate timing, so round-trip latency cannot turn a good local press
+  // into a miss.
+  function applyLocalParryResults(sim, inputs) {
+    for (const p of sim.players) {
+      const inp = inputs[p.id] || {};
+      if (!Array.isArray(inp.parry)) continue;
+      for (const result of inp.parry) {
+        const transferId = Number(result && result.transferId);
+        const outcome = result && result.outcome;
+        if (!Number.isInteger(transferId) ||
+            (outcome !== "success" && outcome !== "punished") ||
+            p.resolvedParryIds.has(transferId)) continue;
+
+        const liveBombs = [sim.bomb, ...sim.fakeBombs].filter(Boolean);
+        const live = liveBombs.find(x => x.transfer && x.transfer.id === transferId &&
+          x.transfer.parryable && x.transfer.toId === p.id);
+        if (live) {
+          if (outcome === "success") live.transfer.parryQueued = true;
+          else live.transfer.parryDenied = true;
+          p.resolvedParryIds.add(transferId);
+          continue;
+        }
+
+        const arrivalIndex = sim.recentParryArrivals.findIndex(r =>
+          r.transferId === transferId && r.receiverId === p.id && r.expiresAt > sim.time);
+        if (arrivalIndex < 0) continue;
+        const arrival = sim.recentParryArrivals[arrivalIndex];
+        sim.recentParryArrivals.splice(arrivalIndex, 1);
+        p.resolvedParryIds.add(transferId);
+        if (outcome !== "success") continue;
+
+        const bombLike = arrival.isFake
+          ? sim.fakeBombs.find(f => f.id === arrival.fakeId)
+          : sim.bomb;
+        if (!bombLike || bombLike.transfer || bombLike.holderId !== p.id) continue;
+        const fromPos = bombLike === sim.bomb ? bombWorldPos(sim) : fakeWorldPos(sim, bombLike);
+        launchParry(sim, bombLike, p, arrival.incomingSpeed, fromPos, true);
+      }
+    }
+  }
+
   // Ownership transfer. Curse waits on the bomb and punishes the *receiver*
   // of the next transfer, then clears.
   function giveBomb(sim, player) {
@@ -430,12 +548,18 @@ const Sim = (() => {
     if (!b || !b.transfer) return;
     b.transfer.elapsed += dt;
     if (b.transfer.elapsed >= b.transfer.duration) {
-      const initial = !b.transfer.fromId;
-      const receiver = getPlayer(sim, b.transfer.toId);
-      const sender = b.transfer.fromId ? getPlayer(sim, b.transfer.fromId) : null;
+      const completed = b.transfer;
+      const initial = !completed.fromId;
+      const receiver = getPlayer(sim, completed.toId);
+      const sender = completed.fromId ? getPlayer(sim, completed.fromId) : null;
       b.transfer = null;
       if (receiver && receiver.alive) {
+        if (completed.parryQueued &&
+            launchParry(sim, b, receiver, completed.speed, completed.toPos, false)) {
+          return;
+        }
         giveBomb(sim, receiver);
+        rememberParryArrival(sim, completed, b);
         addEvent(sim, initial ? `${receiver.name} starts with the bomb!` : `${receiver.name} received the bomb`);
         bounceRealIfOccupied(sim, receiver);
       } else if (sender && sender.alive) {
@@ -468,11 +592,7 @@ const Sim = (() => {
       const fromPos = { x: seat.x + b.offset.x, y: seat.y + b.offset.y };
       const toPos = seatPosition(next.seat, sim.seatCount);
       b.pot = 0;
-      b.transfer = {
-        fromId: holder.id, toId: next.id, elapsed: 0,
-        duration: Math.max(0.001, dist(fromPos, toPos) / C.BombPassSpeed),
-        fromPos, toPos,
-      };
+      b.transfer = makePassTransfer(sim, holder.id, next.id, fromPos, toPos, C.BombPassSpeed);
       return true;
     }
     const fake = sim.fakeBombs.find(fk => fk !== keep && fk.holderId === holder.id && !fk.transfer);
@@ -687,13 +807,13 @@ const Sim = (() => {
       }
 
       case "shield":
-        // Only the current bomb holder may shield, and not while it's
-        // already in flight mid-pass; otherwise the card stays in hand.
-        if (b.transfer) return;
+        // Any living player can raise their personal bubble, regardless of
+        // who is holding the bomb or whether it is currently in flight.
         b.shieldRemaining = C.ShieldDuration;
         b.shieldOwnerId = p.id;
         consume();
-        addEvent(sim, `SHIELD ACTIVATED (${p.name})`, ...posArgs(bombWorldPos(sim)));
+        addEvent(sim, `SHIELD ACTIVATED (${p.name})`,
+          ...posArgs(seatPosition(p.seat, sim.seatCount)));
         break;
 
       case "curse":
@@ -1161,6 +1281,8 @@ const Sim = (() => {
 
   function stepPlaying(sim, inputs, dt) {
     const b = sim.bomb;
+    pruneParryArrivals(sim);
+    applyLocalParryResults(sim, inputs);
 
     // Real-time window right after gameplay starts where the remaining time
     // is shown to everyone, before it goes hidden for the rest of the bomb.
@@ -1339,14 +1461,7 @@ const Sim = (() => {
         const speed = buffed ? C.BombPassSpeed * C.ReinforcedArmSpeedMult : C.BombPassSpeed;
         // holderId stays on the sender while in flight for real and fake
         // alike (arrival reassigns it), so mid-pass state looks the same.
-        bombLike.transfer = {
-          fromId: p.id,
-          toId: next.id,
-          elapsed: 0,
-          duration: Math.max(0.001, dist(fromPos, toPos) / speed),
-          fromPos,
-          toPos,
-        };
+        bombLike.transfer = makePassTransfer(sim, p.id, next.id, fromPos, toPos, speed);
         // Cash in the farming pot at the moment of release. The real bomb pays
         // its pot to the thrower; a fake had the identical buildup and
         // animation but its release cashes out nothing. The public event log
@@ -1407,8 +1522,9 @@ const Sim = (() => {
       if (f.transfer) {
         f.transfer.elapsed += dt;
         if (f.transfer.elapsed >= f.transfer.duration) {
-          const receiver = getPlayer(sim, f.transfer.toId);
-          const arrivedAt = f.transfer.toPos;
+          const completed = f.transfer;
+          const receiver = getPlayer(sim, completed.toId);
+          const arrivedAt = completed.toPos;
           f.transfer = null;
           f.holderId = null;
           if (!receiver || !receiver.alive) {
@@ -1417,6 +1533,10 @@ const Sim = (() => {
             const next = nextAliveFrom(sim, receiver ? receiver.seat : 0);
             if (!next) continue;
             startFakeTransfer(sim, f, arrivedAt, next, null);
+          } else if (completed.parryQueued &&
+              launchParry(sim, f, receiver, completed.speed, arrivedAt, false)) {
+            // launchParry has already made the receiver the outgoing owner
+            // and started the multiplied return transfer.
           } else if (holdsAnyBomb(sim, receiver)) {
             // Hot potato: the arriving decoy stays in the receiver's hands and
             // whatever they were already holding (real or fake) is the one
@@ -1443,6 +1563,8 @@ const Sim = (() => {
             // window reopens so a passed decoy farms and animates like a real bomb.
             receiver.holderAcc = 0;
             receiver.holdElapsed = 0;
+            receiver.passLock = C.BaseMinimumHoldTime;
+            rememberParryArrival(sim, completed, f);
             addEvent(sim, `${receiver.name} received the bomb`);
           }
         }
@@ -1455,20 +1577,61 @@ const Sim = (() => {
   // Launch a fake bomb toward a seat at normal pass speed. holderId mirrors
   // the real bomb's mid-flight convention (the player it's "coming from", or
   // null when it's being forwarded off a dead seat).
-  function startFakeTransfer(sim, f, fromPos, toPlayer, holderId) {
+  function startFakeTransfer(sim, f, fromPos, toPlayer, holderId, speed) {
     const toPos = seatPosition(toPlayer.seat, sim.seatCount);
+    const passSpeed = speed || C.BombPassSpeed;
     f.holderId = holderId;
-    f.transfer = {
-      fromId: holderId,
-      toId: toPlayer.id,
-      elapsed: 0,
-      duration: Math.max(0.001, dist(fromPos, toPos) / C.BombPassSpeed),
-      fromPos,
-      toPos,
-    };
+    f.transfer = holderId
+      ? makePassTransfer(sim, holderId, toPlayer.id, fromPos, toPos, passSpeed)
+      : {
+          fromId: null,
+          toId: toPlayer.id,
+          elapsed: 0,
+          duration: Math.max(0.001, dist(fromPos, toPos) / passSpeed),
+          fromPos,
+          toPos,
+        };
   }
 
   // ---- Snapshots (the only thing clients ever see) -------------------------
+
+  function incomingParryOffer(sim, viewer) {
+    if (!viewer || !viewer.alive) return null;
+    const live = !holdsAnyBomb(sim, viewer) && [sim.bomb, ...sim.fakeBombs]
+      .filter(x => x && x.transfer && x.transfer.parryable &&
+        x.transfer.toId === viewer.id && !x.transfer.parryQueued &&
+        !x.transfer.parryDenied && !viewer.resolvedParryIds.has(x.transfer.id))
+      .sort((a, z) =>
+        (a.transfer.duration - a.transfer.elapsed) -
+        (z.transfer.duration - z.transfer.elapsed))[0];
+    if (live) {
+      return {
+        transferId: live.transfer.id,
+        duration: live.transfer.duration,
+        remaining: Math.max(0, live.transfer.duration - live.transfer.elapsed),
+        incomingSpeed: live.transfer.speed,
+      };
+    }
+
+    // A very fast throw or a badly delayed connection may receive no
+    // in-flight snapshot at all. Keep a short opaque offer after arrival; the
+    // client starts the same duration on receipt, and the host later accepts
+    // it only if this exact bomb is still in this receiver's hands.
+    const recent = sim.recentParryArrivals
+      .filter(r => r.receiverId === viewer.id && r.expiresAt > sim.time &&
+        !viewer.resolvedParryIds.has(r.transferId))
+      .sort((a, z) => z.transferId - a.transferId)
+      .find(r => {
+        const bombLike = r.isFake ? sim.fakeBombs.find(f => f.id === r.fakeId) : sim.bomb;
+        return bombLike && !bombLike.transfer && bombLike.holderId === viewer.id;
+      });
+    return recent ? {
+      transferId: recent.transferId,
+      duration: recent.duration,
+      remaining: recent.duration,
+      incomingSpeed: recent.incomingSpeed,
+    } : null;
+  }
 
   // The exact remaining time is included only inside `you.reveal` for an
   // eliminated viewer or while a living viewer's own Magnifying Glass is
@@ -1627,6 +1790,7 @@ const Sim = (() => {
           cooldown: Math.max(0, viewer.gunPending.nextShotAt - sim.time),
         } : null,
         passLock: viewer.passLock,
+        incomingParry: incomingParryOffer(sim, viewer),
         canPass: !!(sim.phase === "playing" && !viewer.taunting && viewer.passLock <= 0 &&
           ((b && !b.transfer && b.holderId === viewerId) || fakeHeldBy(sim, viewerId))),
         // Eliminated players always see the exact bomb timer. Living players

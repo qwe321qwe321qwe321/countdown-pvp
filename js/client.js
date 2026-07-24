@@ -45,6 +45,7 @@ const Client = (() => {
 
     return {
       destroy() { stopSending(); net.close(); },
+      rename(name) { net.send({ type: "rename", name }); },
     };
   }
 

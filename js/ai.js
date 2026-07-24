@@ -13,6 +13,8 @@ const AI = (() => {
       wander: Math.random() * Math.PI * 2,
       aimSlot: null,     // gun slot the bot has raised and is aiming, not fired yet
       aimReadyAt: 0,     // sim.time this bot may actually pull the trigger
+      parryTransferId: null,
+      parryWillAttempt: false,
     };
   }
 
@@ -22,7 +24,7 @@ const AI = (() => {
 
   function botInput(sim, player, brain) {
     const inp = {
-      mx: player.aim.x, my: player.aim.y, pass: false, use: [],
+      mx: player.aim.x, my: player.aim.y, pass: false, parry: [], use: [],
       primaryFire: false, gunFireSlot: null,
     };
     if (!player.alive) {
@@ -47,6 +49,27 @@ const AI = (() => {
     if (sim.phase !== "playing" || !sim.bomb) return inp;
 
     const b = sim.bomb;
+    const incoming = [b, ...sim.fakeBombs]
+      .filter(x => x && x.transfer && x.transfer.parryable &&
+        x.transfer.toId === player.id && !x.transfer.parryQueued &&
+        !x.transfer.parryDenied)
+      .sort((a, z) =>
+        (a.transfer.duration - a.transfer.elapsed) -
+        (z.transfer.duration - z.transfer.elapsed))[0];
+    if (incoming) {
+      const tr = incoming.transfer;
+      if (brain.parryTransferId !== tr.id) {
+        brain.parryTransferId = tr.id;
+        brain.parryWillAttempt = Math.random() < 0.65;
+      }
+      const total = C.ParryPunishWindow + C.ParryWindow;
+      const parryWindow = C.ParryWindow * Math.min(1, tr.duration / total);
+      const remaining = tr.duration - tr.elapsed;
+      if (brain.parryWillAttempt && remaining > 0 && remaining <= parryWindow) {
+        inp.parry.push({ transferId: tr.id, outcome: "success" });
+        brain.parryWillAttempt = false;
+      }
+    }
     // A fake decoy in hand is carried/passed exactly like the real bomb, so
     // the bot treats "holding" identically for both — it hot-potatoes a fake
     // onward just as urgently, which is exactly what keeps the bluff alive.

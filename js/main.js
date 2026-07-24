@@ -2,7 +2,8 @@
 
 // Top-level app: menu -> host/join lobby -> game. Captures local input into a
 // collector, wires PeerJS sessions, and runs the render loop. No gameplay
-// rules live here — the host's sim decides everything.
+// rules live here except latency-sensitive parry-window classification; the
+// host's sim still validates and applies every resulting state change.
 (() => {
   const $ = id => document.getElementById(id);
 
@@ -19,11 +20,13 @@
   function makeCollector() {
     const state = {
       mx: null, my: null, pass: false, use: [], discard: [],
+      parry: [],
       debug: false, equip: null, primaryFire: false, gunFireSlot: null,
     };
     return {
       setMouse(x, y) { state.mx = x; state.my = y; },
       pressPass() { state.pass = true; },
+      pressParry(transferId, outcome) { state.parry.push({ transferId, outcome }); },
       pressUse(slot) { state.use.push(slot); },
       pressDiscard(slot) { state.discard.push(slot); },
       setDebug(v) { state.debug = v; },
@@ -34,11 +37,12 @@
       take() {
         const out = {
           mx: state.mx, my: state.my, pass: state.pass,
+          parry: state.parry.slice(),
           use: state.use.slice(), discard: state.discard.slice(), debug: state.debug,
           equip: state.equip, primaryFire: state.primaryFire,
           gunFireSlot: state.gunFireSlot,
         };
-        state.pass = false; state.use = []; state.discard = [];
+        state.pass = false; state.parry = []; state.use = []; state.discard = [];
         return out;
       },
     };
@@ -52,8 +56,11 @@
   const NAME_KEY = "countdown-pvp:playerName";
   const savedName = localStorage.getItem(NAME_KEY);
   if (savedName) $("playerName").value = savedName;
+  function setSavedName(name) {
+    localStorage.setItem(NAME_KEY, name);
+  }
   $("playerName").addEventListener("input", () => {
-    localStorage.setItem(NAME_KEY, $("playerName").value.trim());
+    setSavedName($("playerName").value.trim());
   });
 
   let role = null;            // 'host' | 'client'
@@ -61,6 +68,107 @@
   let clientSession = null;
   let myId = null;
   let latestSnap = null;
+  let latestSnapReceivedMs = performance.now();
+
+  // Parry timing is deliberately client-local. The first snapshot announcing
+  // an incoming transfer starts a local clock that is never corrected by
+  // later host snapshots, so network transit time and jitter cannot move the
+  // player's punish/parry windows. The transfer id makes the returned result
+  // safe to apply only to that exact incoming throw.
+  let localParry = null;
+  const seenParryTransfers = new Set();
+
+  function acceptSnapshot(snap) {
+    latestSnap = snap;
+    latestSnapReceivedMs = performance.now();
+    const offer = snap && snap.you && snap.you.incomingParry;
+    if (offer && !seenParryTransfers.has(offer.transferId)) {
+      seenParryTransfers.add(offer.transferId);
+      if (seenParryTransfers.size > 100) {
+        const oldest = seenParryTransfers.values().next().value;
+        seenParryTransfers.delete(oldest);
+      }
+      localParry = {
+        transferId: offer.transferId,
+        duration: offer.duration,
+        initialRemaining: offer.remaining,
+        incomingSpeed: offer.incomingSpeed,
+        startedAtMs: latestSnapReceivedMs,
+        outcome: null,
+        outcomeAtMs: null,
+      };
+    }
+  }
+
+  function localParryView(nowMs) {
+    if (!localParry) return null;
+    const elapsed = Math.max(0, (nowMs - localParry.startedAtMs) / 1000);
+    const remaining = localParry.initialRemaining - elapsed;
+    const configuredTotal = CONFIG.ParryPunishWindow + CONFIG.ParryWindow;
+    const scale = Math.min(1, localParry.duration / configuredTotal);
+    const punishWindow = CONFIG.ParryPunishWindow * scale;
+    const parryWindow = CONFIG.ParryWindow * scale;
+    let state;
+    if (localParry.outcome) {
+      state = localParry.outcome === "success" ? "success" : "punished";
+    } else if (remaining > punishWindow + parryWindow) {
+      state = "incoming";
+    } else if (remaining > parryWindow) {
+      state = "punish";
+    } else if (remaining > 0) {
+      state = "parry";
+    } else {
+      state = "missed";
+    }
+    return {
+      transferId: localParry.transferId,
+      state,
+      remaining: Math.max(0, remaining),
+      successAge: state === "success" && localParry.outcomeAtMs != null
+        ? Math.max(0, (nowMs - localParry.outcomeAtMs) / 1000)
+        : null,
+      incomingSpeed: localParry.incomingSpeed,
+      outgoingSpeed: localParry.incomingSpeed * CONFIG.ParrySpeedMultiplier,
+    };
+  }
+
+  function pressSpace() {
+    const view = localParryView(performance.now());
+    if (view) {
+      if (!localParry.outcome) {
+        if (view.state === "punish") {
+          localParry.outcome = "punished";
+          localParry.outcomeAtMs = performance.now();
+          collector.pressParry(view.transferId, "punished");
+        } else if (view.state === "parry") {
+          localParry.outcome = "success";
+          localParry.outcomeAtMs = performance.now();
+          collector.pressParry(view.transferId, "success");
+        }
+      }
+      // An incoming throw owns SPACE for its whole local timeline, including
+      // after an early punish. It can never leak into a normal pass on arrival.
+      return;
+    }
+    collector.pressPass();
+  }
+
+  function withLocalParry(snap, nowMs) {
+    if (!snap || !snap.you) return snap;
+    const view = localParryView(nowMs);
+    if (!view) return snap;
+    const outcomeExpired = localParry.outcomeAtMs != null &&
+      nowMs - localParry.outcomeAtMs > 450;
+    const missedExpired = !localParry.outcome && view.state === "missed" &&
+      nowMs - localParry.startedAtMs > (localParry.initialRemaining + 0.45) * 1000;
+    if (outcomeExpired || missedExpired) {
+      localParry = null;
+      return snap;
+    }
+    return Object.assign({}, snap, {
+      you: Object.assign({}, snap.you, { parry: view }),
+    });
+  }
 
   // ---- Local prediction (client only) --------------------------------------
   // The host is authoritative and only echoes state back at SnapshotRate, so a
@@ -303,7 +411,7 @@
     if (!screens["screen-game"].classList.contains("active")) return;
     if (e.code === "Escape") { cancelAim(); return; }
     if (e.repeat) return;
-    if (e.code === "Space") { e.preventDefault(); collector.pressPass(); }
+    if (e.code === "Space") { e.preventDefault(); pressSpace(); }
     else if (e.code === "Digit1") activateCard(0);
     else if (e.code === "Digit2") activateCard(1);
     else if (e.code === "Digit3") activateCard(2);
@@ -311,7 +419,7 @@
     else if (e.code === "Digit5") activateCard(4);
   });
 
-  $("btnPass").onclick = () => collector.pressPass();
+  $("btnPass").onclick = () => pressSpace();
   $("chkDebug").onchange = e => collector.setDebug(e.target.checked);
 
   // ---- Render loop (shared by host and client) ----
@@ -338,7 +446,8 @@
 
       // Host draws its own 60Hz sim raw. Clients draw the newest snapshot with
       // only the local player's own arm/aim predicted forward from the mouse.
-      const viewSnap = role === "client" ? applyLocalPrediction(latestSnap, dtMs) : latestSnap;
+      const predictedSnap = role === "client" ? applyLocalPrediction(latestSnap, dtMs) : latestSnap;
+      const viewSnap = withLocalParry(predictedSnap, nowMs);
 
       const hoverPt = collector.peek();
       Render.draw(ctx, viewSnap, myId, hoverPt.mx != null ? { x: hoverPt.mx, y: hoverPt.my } : null);
@@ -358,6 +467,8 @@
     dom.eventLog.innerHTML = "";
     predOffset = null;
     predHolder = false;
+    localParry = null;
+    seenParryTransfers.clear();
     show("game");
   }
 
@@ -406,12 +517,18 @@
       },
       onError: err => { alert("Network error: " + (err && err.type ? err.type : err)); },
       onLobby: roster => renderSeats($("hostSeatList"), roster),
-      onSnapshot: snap => { latestSnap = snap; },
+      onSnapshot: acceptSnapshot,
     });
     renderSeats($("hostSeatList"), [{ id: "P0", name: playerName(), isBot: false }]);
+    $("hostPlayerName").value = playerName();
     buildPoolChecks();
     buildTeamCountSelect();
   };
+
+  $("hostPlayerName").addEventListener("input", () => {
+    setSavedName($("hostPlayerName").value.trim());
+    if (hostSession) hostSession.renameSelf($("hostPlayerName").value.trim());
+  });
 
   function buildTeamCountSelect() {
     const sel = $("teamCountSelect");
@@ -478,39 +595,70 @@
     $("joinStatus").textContent = "";
   };
 
-  $("btnJoinConnect").onclick = () => {
-    const code = $("joinCode").value.trim();
-    if (!code) { $("joinStatus").textContent = "Enter a room code."; return; }
+  // Shared by the manual join screen and join-by-link: connects straight into
+  // the client lobby, falling back to the join screen (with the code and
+  // name prefilled) if the room can't be reached.
+  function startJoin(code, name) {
     role = "client";
-    $("joinStatus").textContent = "Connecting…";
+    show("client-lobby");
+    $("clientPlayerName").value = name;
+    $("clientConnectStatus").textContent = "Connecting…";
+    renderSeats($("clientSeatList"), []);
+    $("clientTeamInfo").textContent = "";
+
+    function fallbackToJoinScreen(message) {
+      show("join");
+      $("joinCode").value = code;
+      $("joinName").value = name;
+      $("joinStatus").textContent = message;
+    }
 
     clientSession = Client.createSession({
       code,
-      name: joinPlayerName(),
+      name,
       collector,
-      onWelcome: id => { myId = id; show("client-lobby"); },
-      onReject: reason => { $("joinStatus").textContent = "Rejected: " + reason; },
+      onWelcome: id => { myId = id; $("clientConnectStatus").textContent = ""; },
+      onReject: reason => fallbackToJoinScreen("Rejected: " + reason),
       onLobby: (roster, pool, teamCount) => {
         renderSeats($("clientSeatList"), roster);
         $("clientTeamInfo").textContent = teamCount > 1 ? `Team Mode: ${teamCount} Teams` : "Free-for-all";
       },
       onStart: enterGame,
       onReturnToLobby: () => show("client-lobby"),
-      onSnapshot: snap => { latestSnap = snap; },
+      onSnapshot: acceptSnapshot,
       onClosed: () => {
         alert("Disconnected from host.");
         location.reload();
       },
-      onError: err => { $("joinStatus").textContent = "Error: " + (err && err.type ? err.type : err); },
+      onError: err => fallbackToJoinScreen("Error: " + (err && err.type ? err.type : err)),
     });
+  }
+
+  $("clientPlayerName").addEventListener("input", () => {
+    setSavedName($("clientPlayerName").value.trim());
+    if (clientSession) clientSession.rename($("clientPlayerName").value.trim());
+  });
+
+  $("btnLeaveLobby").onclick = () => {
+    if (clientSession) { clientSession.destroy(); clientSession = null; }
+    role = null;
+    myId = null;
+    if (location.search) history.replaceState(null, "", location.pathname);
+    show("menu");
+  };
+
+  $("btnJoinConnect").onclick = () => {
+    const code = $("joinCode").value.trim();
+    if (!code) { $("joinStatus").textContent = "Enter a room code."; return; }
+    startJoin(code, joinPlayerName());
   };
 
   // ---- Join-by-link ----
-  // A host's share link is `?room=CODE`; land straight on the join screen
-  // with the code prefilled so the guest only needs to enter their name.
+  // A host's share link is `?room=CODE`; land straight in the client lobby
+  // using the player's saved name, so a guest clicking the link needs no
+  // extra steps to get in (they can still rename themselves in the lobby).
   const roomParam = new URLSearchParams(location.search).get("room");
   if (roomParam) {
-    $("joinCode").value = roomParam;
-    show("join");
+    startJoin(roomParam, playerName());
   }
 })();

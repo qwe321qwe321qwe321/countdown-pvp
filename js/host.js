@@ -75,6 +75,15 @@ const Host = (() => {
         if (!pid) return;
         accumulate(pid, msg.input);
         debugWanted.set(pid, !!msg.input.debug);
+      } else if (msg.type === "rename") {
+        if (started) return;
+        const pid = peerToPlayer.get(peerId);
+        if (!pid) return;
+        const p = roster.find(r => r.id === pid);
+        if (p) {
+          p.name = String(msg.name || "Player").slice(0, 16) || "Player";
+          lobbyChanged();
+        }
       }
     }
 
@@ -86,12 +95,14 @@ const Host = (() => {
       if (!buf) {
         buf = {
           mx: null, my: null, pass: false, use: [], discard: [],
+          parry: [],
           equip: null, primaryFire: false, gunFireSlot: null,
         };
         remoteInputs.set(pid, buf);
       }
       if (inc.mx != null) { buf.mx = inc.mx; buf.my = inc.my; }
       buf.pass = buf.pass || !!inc.pass;
+      if (Array.isArray(inc.parry) && inc.parry.length) buf.parry.push(...inc.parry);
       if (Array.isArray(inc.use) && inc.use.length) buf.use.push(...inc.use);
       if (Array.isArray(inc.discard) && inc.discard.length) buf.discard.push(...inc.discard);
       buf.equip = (inc.equip == null) ? null : inc.equip; // latest wins, like mouse position
@@ -128,6 +139,15 @@ const Host = (() => {
       lobbyChanged();
     }
 
+    function renameSelf(name) {
+      if (started) return;
+      const p = roster.find(r => r.id === "P0");
+      if (p) {
+        p.name = String(name || "Player").slice(0, 16) || "Player";
+        lobbyChanged();
+      }
+    }
+
     // ---- Game loop ----
 
     function start() {
@@ -155,10 +175,11 @@ const Host = (() => {
       for (const [pid, buf] of remoteInputs) {
         inputs[pid] = {
           mx: buf.mx, my: buf.my, pass: buf.pass,
+          parry: buf.parry.slice(),
           use: buf.use.slice(), discard: buf.discard.slice(), equip: buf.equip,
           primaryFire: buf.primaryFire, gunFireSlot: buf.gunFireSlot,
         };
-        buf.pass = false; buf.use = []; buf.discard = [];
+        buf.pass = false; buf.parry = []; buf.use = []; buf.discard = [];
       }
       return inputs;
     }
@@ -167,6 +188,7 @@ const Host = (() => {
       for (const pid in inputs) {
         inputs[pid] = {
           mx: inputs[pid].mx, my: inputs[pid].my, pass: false,
+          parry: [],
           use: [], discard: [], equip: inputs[pid].equip,
           primaryFire: inputs[pid].primaryFire, gunFireSlot: inputs[pid].gunFireSlot,
         };
@@ -230,7 +252,7 @@ const Host = (() => {
     }
 
     return {
-      addBot, removeBot, setPool, setTeamCount, start, rematch, toLobby, destroy,
+      addBot, removeBot, setPool, setTeamCount, renameSelf, start, rematch, toLobby, destroy,
       getPool: () => pool.slice(), getTeamCount: () => teamCount,
     };
   }
