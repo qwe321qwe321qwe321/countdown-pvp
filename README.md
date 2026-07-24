@@ -35,7 +35,7 @@ by everyone: Magnifying Glass, one attack card, one defense card, and one other
 non-duplicate random card. The right-side codex shows the current round's pool.
 Each player opens with a Magnifying Glass and that opening pool's attack card.
 
-The host lobby also exposes four experimental switches:
+The host lobby also exposes five experimental switches:
 
 - **Public seconds** keeps every lethal/decoy timer visible and removes the
   Magnifying Glass from starting hands and card rolls. This mode exclusively
@@ -57,6 +57,9 @@ The host lobby also exposes four experimental switches:
   (slower weapons wander farther), and every ray receives additional random
   spread. A short authoritative trail shows its exact path. Bomb passes,
   repair-kit throws, and Grapple Claws remain moving projectiles.
+- **One-time $10 bomb pot** limits each hold to generating $10 in total.
+  Damaging enemy shots still steal up to $2 from the stored pot, but those
+  stolen coins no longer regenerate before the bomb is passed.
 
 ## Architecture (host authoritative)
 
@@ -123,7 +126,8 @@ the result with an opaque transfer id, so network round-trip latency cannot spoi
 - **Economy**: integer coins only; passive income for alive players and a bomb pot cashed
   on throw. Purchases happen automatically when affordable. A holder can taunt to farm the
   pot at 2× speed while surrendering arm and pass control. If a full pot is damaged by a
-  coin-stealing shot, it continues replenishing back to its $10 cap.
+  coin-stealing shot, it continues replenishing back to its $10 cap unless the
+  one-time $10 bomb pot lobby option is enabled.
 - **Fake Bomb reward**: a fake pops with a distinct confetti/coin effect instead of the
   lethal blast ring and awards $10 to the closest living player.
 - **Bomb pot damage**: each damaging hit on the real bomb steals up to 2 coins

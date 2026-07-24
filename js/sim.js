@@ -215,6 +215,7 @@ const Sim = (() => {
       doubleBomb: !!(requestedModes && requestedModes.doubleBomb),
       roguelikeShop: !!(requestedModes && requestedModes.roguelikeShop),
       wobblyHitscan: !!(requestedModes && requestedModes.wobblyHitscan),
+      nonRefillingBombPot: !!(requestedModes && requestedModes.nonRefillingBombPot),
       shockGunJamDuration: Math.round(
         clampedJamDuration / C.ShockGunJamDurationStep) *
         C.ShockGunJamDurationStep,
@@ -356,6 +357,7 @@ const Sim = (() => {
       curseActive: false,
       timerJamRemaining: 0,
       pot: 0,                     // farming income accrued while held; paid to whoever throws it
+      potGenerated: 0,            // lifetime minting for this hold; shots never reduce it
       transfer: target
         ? { fromId: null, toId: target.id, elapsed: 0, duration: travelWindow, fromPos, toPos }
         : null,
@@ -383,6 +385,7 @@ const Sim = (() => {
         curseActive: false,
         timerJamRemaining: 0,
         pot: 0,
+        potGenerated: 0,
         transfer: secondTarget
           ? {
               fromId: null, toId: secondTarget.id, elapsed: 0,
@@ -553,6 +556,7 @@ const Sim = (() => {
         bombLike.holderId = receiver.id;
         bombLike.offset = { x: 0, y: 0 };
         bombLike.pot = 0;
+        bombLike.potGenerated = 0;
         receiver.holderAcc = 0;
         receiver.holdElapsed = 0;
         receiver.passLock = C.BaseMinimumHoldTime;
@@ -564,6 +568,7 @@ const Sim = (() => {
       incomingSpeed * C.ParrySpeedMultiplier);
     bombLike.holderId = receiver.id;
     bombLike.pot = 0;
+    bombLike.potGenerated = 0;
     bombLike.transfer = makePassTransfer(sim, receiver.id, next.id, fromPos, toPos, speed);
     return true;
   }
@@ -618,6 +623,7 @@ const Sim = (() => {
     b.holderId = player.id;
     b.offset = { x: 0, y: 0 };
     b.pot = 0;                    // new carrier starts a fresh farming pot
+    b.potGenerated = 0;
     player.holderAcc = 0;
     player.holdElapsed = 0;
     if (b.curseActive) {
@@ -682,12 +688,14 @@ const Sim = (() => {
       const fromPos = { x: seat.x + b.offset.x, y: seat.y + b.offset.y };
       const toPos = seatPosition(next.seat, sim.seatCount);
       b.pot = 0;
+      b.potGenerated = 0;
       b.transfer = makePassTransfer(sim, holder.id, next.id, fromPos, toPos, C.BombPassSpeed);
       return true;
     }
     const fake = sim.fakeBombs.find(fk => fk !== keep && fk.holderId === holder.id && !fk.transfer);
     if (fake) {
       fake.pot = 0;
+      fake.potGenerated = 0;
       startFakeTransfer(sim, fake, fakeWorldPos(sim, fake), next, holder.id);
       return true;
     }
@@ -840,6 +848,7 @@ const Sim = (() => {
       curseActive: !!f.curseActive,
       timerJamRemaining: f.timerJamRemaining || 0,
       pot: f.pot || 0,
+      potGenerated: f.potGenerated || 0,
       transfer: f.transfer,
     };
     return true;
@@ -1103,6 +1112,7 @@ const Sim = (() => {
           transfer: null,
           timerJamRemaining: 0,
           pot: 0,                 // accrues + animates like the real bomb, but never pays out on release
+          potGenerated: 0,
 
           // The creator alone gets to read the decoy's rolled timer for a
           // few seconds (delivered only inside their own snapshot).
@@ -1779,11 +1789,12 @@ const Sim = (() => {
       const holding = !!heldBomb;
       p.taunting = holding && !!(inp.primaryFire || inp.deadFire);
       const stalling = holding && p.holdElapsed >= C.BombHolderCoinDuration;
-      // Once the real bomb has naturally reached its cap, a damaging hit may
-      // steal from that stored pot after the normal farming window expires.
-      // Let the holder replenish that damage instead of permanently freezing
-      // the pot below its cap. Fake bombs never lose pot to projectile hits.
-      const refillingStolenPot = stalling && heldBomb === b &&
+      // Under the original rule, a damaging hit can open room in a full real
+      // bomb pot and the holder may refill it even after the normal farming
+      // window. The optional one-time-pot rule tracks total minted coins
+      // separately, so stolen coins never restore that minting allowance.
+      const refillingStolenPot = !sim.modes.nonRefillingBombPot &&
+        stalling && heldBomb === b &&
         heldBomb.pot < C.BombHolderPotCap;
       if (holding) {
         // Farming the bomb replaces passive income entirely, not stacks on
@@ -1795,9 +1806,18 @@ const Sim = (() => {
           p.holderAcc += dt * (p.taunting ? C.TauntFarmMultiplier : 1);
           // Flat rate, deliberately not scaled by coinScale — farming speed
           // is the same 2 coins/s no matter how many players are seated.
-          while (p.holderAcc >= C.BombHolderCoinInterval && heldBomb.pot < C.BombHolderPotCap) {
+          while (p.holderAcc >= C.BombHolderCoinInterval &&
+              (sim.modes.nonRefillingBombPot
+                ? heldBomb.potGenerated < C.BombHolderPotCap
+                : heldBomb.pot < C.BombHolderPotCap)) {
             p.holderAcc -= C.BombHolderCoinInterval;
-            heldBomb.pot = Math.min(C.BombHolderPotCap, heldBomb.pot + C.BombHolderCoinAmount);
+            const amount = sim.modes.nonRefillingBombPot
+              ? Math.min(C.BombHolderCoinAmount,
+                C.BombHolderPotCap - heldBomb.potGenerated)
+              : Math.min(C.BombHolderCoinAmount,
+                C.BombHolderPotCap - heldBomb.pot);
+            heldBomb.pot += amount;
+            heldBomb.potGenerated += amount;
           }
         }
       } else {
@@ -1913,6 +1933,7 @@ const Sim = (() => {
           p.lastPayoutSeq += 1;
         }
         bombLike.pot = 0;
+        bombLike.potGenerated = 0;
         addEvent(sim, `${p.name} is passing the bomb to ${next.name}...`);
       }
     }
@@ -1998,6 +2019,7 @@ const Sim = (() => {
             f.holderId = receiver.id;
             f.offset = { x: 0, y: 0 };
             f.pot = 0;
+            f.potGenerated = 0;
             if (throwOtherBombOnward(sim, receiver, f)) {
               receiver.holderAcc = 0;
               receiver.holdElapsed = 0;
@@ -2012,6 +2034,7 @@ const Sim = (() => {
             f.holderId = receiver.id;
             f.offset = { x: 0, y: 0 };
             f.pot = 0;
+            f.potGenerated = 0;
             // Same holder-income reset as giveBomb: the receiver's carry
             // window reopens so a passed decoy farms and animates like a real bomb.
             receiver.holderAcc = 0;
@@ -2198,8 +2221,14 @@ const Sim = (() => {
         const isHolderNow = !!(b && b.holderId === p.id) || sim.fakeBombs.some(f => f.holderId === p.id);
         const handsFullNow = !!(b && b.holderId === p.id && !b.transfer) ||
           !!fakeHeldBy(sim, p.id);
-        const refillingStolenPot = !!(b && b.holderId === p.id && !b.transfer &&
+        const refillingStolenPot = !sim.modes.nonRefillingBombPot &&
+          !!(b && b.holderId === p.id && !b.transfer &&
           p.holdElapsed >= C.BombHolderCoinDuration && b.pot < C.BombHolderPotCap);
+        const heldBombForIncome = (b && b.holderId === p.id && !b.transfer)
+          ? b : fakeHeldBy(sim, p.id);
+        const canMintPot = !!heldBombForIncome &&
+          (!sim.modes.nonRefillingBombPot ||
+            heldBombForIncome.potGenerated < C.BombHolderPotCap);
         const chargedWeapon = !p.disconnected &&
           (!p.alive || (!handsFullNow && !equipped && !revealing));
         const equippedCardId = equipped ? p.hand[p.equippedSlot] : null;
@@ -2227,11 +2256,13 @@ const Sim = (() => {
           // Also stays active while restoring coins stolen from an already
           // maxed real-bomb pot, even after the normal farming window.
           earningBonus: isHolderNow &&
+            canMintPot &&
             (p.holdElapsed < C.BombHolderCoinDuration || refillingStolenPot),
           // Past the grace window: holding the bomb currently earns nothing —
           // shown so everyone can see the stalling penalty has kicked in.
           earningPenalty: isHolderNow &&
-            p.holdElapsed >= C.BombHolderCoinDuration && !refillingStolenPot,
+            (!canMintPot ||
+              (p.holdElapsed >= C.BombHolderCoinDuration && !refillingStolenPot)),
           // Coins and hand size are public — hovering another player shows
           // both so you can size up who's ahead and who's stocked up on cards.
           coins: p.coins,

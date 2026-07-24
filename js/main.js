@@ -550,7 +550,7 @@
     configureShockGunDurationInput();
     syncModeChecks({
       publicSeconds: false, doubleBomb: false, roguelikeShop: false,
-      wobblyHitscan: false,
+      wobblyHitscan: false, nonRefillingBombPot: false,
       shockGunJamDuration: CONFIG.ShockGunJamDurationDefault,
       useEmpCard: false,
     });
@@ -598,6 +598,7 @@
       doubleBomb: $("modeDoubleBomb").checked,
       roguelikeShop: $("modeRoguelikeShop").checked,
       wobblyHitscan: $("modeWobblyHitscan").checked,
+      nonRefillingBombPot: $("modeNonRefillingBombPot").checked,
       shockGunJamDuration: Number($("shockGunJamDuration").value),
       useEmpCard: $("modeEmpCard").checked,
     };
@@ -617,6 +618,7 @@
     $("modeDoubleBomb").checked = !!modes.doubleBomb;
     $("modeRoguelikeShop").checked = !!modes.roguelikeShop;
     $("modeWobblyHitscan").checked = !!modes.wobblyHitscan;
+    $("modeNonRefillingBombPot").checked = !!modes.nonRefillingBombPot;
     $("modeEmpCard").checked = !!modes.useEmpCard;
     $("shockGunJamDuration").value = String(
       modes.shockGunJamDuration == null
@@ -626,7 +628,7 @@
 
   for (const id of [
     "modePublicSeconds", "modeDoubleBomb", "modeRoguelikeShop", "modeWobblyHitscan",
-    "shockGunJamDuration", "modeEmpCard",
+    "modeNonRefillingBombPot", "shockGunJamDuration", "modeEmpCard",
   ]) {
     $(id).onchange = () => {
       if (hostSession) hostSession.setModes(selectedModes());
@@ -703,6 +705,7 @@
         if (modes.doubleBomb) labels.push("Double bomb");
         if (modes.roguelikeShop) labels.push("Roguelike shop");
         if (modes.wobblyHitscan) labels.push("Wobbly hitscan");
+        if (modes.nonRefillingBombPot) labels.push("One-time $10 bomb pot");
         $("clientTeamInfo").textContent = labels.join(" · ");
       },
       onStart: enterGame,
