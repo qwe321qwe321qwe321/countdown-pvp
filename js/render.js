@@ -93,14 +93,6 @@ const Render = (() => {
         ctx.fillText("🔍", p.x + C.PlayerBodyRadius + 4, p.y - C.PlayerBodyRadius - 6);
       }
 
-      // Bonus-income cue: pulsing ring + coins drifting up while the
-      // holder-bonus window is open, gone the instant it stops (pass it off
-      // / window ends).
-      if (p.alive && p.earningBonus) drawCoinParticles(ctx, p, snap.time);
-
-      // Stalling penalty cue: holder has been sitting on the bomb past the
-      // grace window and is currently earning nothing.
-      if (p.alive && p.earningPenalty) drawStalledIcon(ctx, p, snap.time);
 
       // Reinforced Arm: public "iron arm" cue while the buff is active.
       if (p.alive && p.armBuffed) {
@@ -137,7 +129,7 @@ const Render = (() => {
         ctx.fillText(f.privateRemaining.toFixed(1) + "s", f.x, f.y);
         ctx.textBaseline = "alphabetic";
       }
-      drawPotBadge(ctx, f.x, f.y, f.pot);
+      drawPotBadge(ctx, f.x, f.y, f.pot, snap.time);
     }
 
     // Arms: body -> hands -> bomb, only for the current holder, and only
@@ -352,48 +344,6 @@ const Render = (() => {
     ctx.restore();
   }
 
-  // Deterministic little coin puffs rising off a player, driven purely by
-  // snap.time so it needs no particle-system state of its own — matches the
-  // rest of this module's "render is a pure function of snap" approach.
-  // Paired with a pulsing golden ring so the bonus window is unmistakable at
-  // a glance, not just a small drifting emoji.
-  function drawCoinParticles(ctx, p, time) {
-    const pulse = 0.5 + 0.5 * Math.sin(time * 5);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, C.PlayerBodyRadius + 7 + pulse * 3, 0, Math.PI * 2);
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = `rgba(255,213,76,${0.45 + pulse * 0.4})`;
-    ctx.stroke();
-
-    const seed = (p.seat * 37) % 100;
-    const COUNT = 4, PERIOD = 0.8;
-    for (let i = 0; i < COUNT; i++) {
-      const phase = (seed + i * 25) % 100 / 100;
-      const t = ((time / PERIOD + phase) % 1 + 1) % 1; // 0..1 loop
-      const rise = t * 40;
-      const drift = Math.sin((t + phase) * Math.PI * 2) * 10;
-      const alpha = 1 - t;
-      ctx.font = `bold ${14 + t * 6}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.globalAlpha = alpha;
-      ctx.fillText("💰", p.x + drift, p.y - C.PlayerBodyRadius - 6 - rise);
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  // Red pulsing ring + crossed-out coin: the holder is past the grace window
-  // and currently earning nothing — the stalling penalty is active.
-  function drawStalledIcon(ctx, p, time) {
-    const pulse = 0.5 + 0.5 * Math.sin(time * 6);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, C.PlayerBodyRadius + 7, 0, Math.PI * 2);
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = `rgba(255,80,80,${0.4 + pulse * 0.35})`;
-    ctx.stroke();
-    ctx.font = "bold 16px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("🚫💰", p.x, p.y - C.PlayerBodyRadius - 16);
-  }
 
   // Tooltip shown while aiming at another player: their coin total and hand
   // size, so you can size up who's ahead without asking.
@@ -465,28 +415,31 @@ const Render = (() => {
       ctx.fillText(b.publicRemaining.toFixed(1) + "s", b.x, b.y);
       ctx.textBaseline = "alphabetic";
     }
-    drawPotBadge(ctx, b.x, b.y, b.pot);
+    drawPotBadge(ctx, b.x, b.y, b.pot, snap.time);
   }
 
   // Farmed-pot badge, shown on the bomb itself while it's being held — public
   // to everyone, and drawn identically for a fake decoy (see the fakeBombs
   // loop in draw()) so the number on screen never tells the two apart. Only
-  // whether it actually pays out on release stays private.
-  function drawPotBadge(ctx, x, y, pot) {
+  // whether it actually pays out on release stays private. Once the pot hits
+  // its cap it swaps to a pulsing "MAX" badge so the stop is unmistakable.
+  function drawPotBadge(ctx, x, y, pot, time) {
     if (!pot) return;
-    const text = `💰${pot}`;
+    const maxed = pot >= C.BombHolderPotCap;
+    const text = maxed ? `💰${pot} MAX` : `💰${pot}`;
     ctx.font = "bold 13px sans-serif";
     const padX = 6, padY = 3;
     const w = ctx.measureText(text).width + padX * 2;
     const h = 16 + padY * 2 - 4;
     const bx = x, by = y + C.BombRadius + 16;
+    const pulse = maxed ? 0.5 + 0.5 * Math.sin(time * 7) : 0;
     ctx.fillStyle = "rgba(20,22,28,0.82)";
-    ctx.strokeStyle = "rgba(255,213,76,0.7)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = maxed ? `rgba(255,90,60,${0.7 + pulse * 0.3})` : "rgba(255,213,76,0.7)";
+    ctx.lineWidth = maxed ? 2 : 1;
     roundRect(ctx, bx - w / 2, by - h / 2, w, h, 5);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = "#ffd54c";
+    ctx.fillStyle = maxed ? "#ff7a54" : "#ffd54c";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(text, bx, by + 1);
