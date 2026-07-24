@@ -17,7 +17,10 @@
   // One shared shape for host-local play and network clients: mouse position
   // is continuous, presses accumulate until take() is called.
   function makeCollector() {
-    const state = { mx: null, my: null, pass: false, draw: false, use: [], discard: [], debug: false, equip: null };
+    const state = {
+      mx: null, my: null, pass: false, draw: false, use: [], discard: [],
+      debug: false, equip: null, deadFire: false,
+    };
     return {
       setMouse(x, y) { state.mx = x; state.my = y; },
       pressPass() { state.pass = true; },
@@ -26,12 +29,13 @@
       pressDiscard(slot) { state.discard.push(slot); },
       setDebug(v) { state.debug = v; },
       setEquip(slot) { state.equip = slot; },
+      setDeadFire(v) { state.deadFire = !!v; },
       peek() { return state; },
       take() {
         const out = {
           mx: state.mx, my: state.my, pass: state.pass, draw: state.draw,
           use: state.use.slice(), discard: state.discard.slice(), debug: state.debug,
-          equip: state.equip,
+          equip: state.equip, deadFire: state.deadFire,
         };
         state.pass = false; state.draw = false; state.use = []; state.discard = [];
         return out;
@@ -97,6 +101,7 @@
   // it needs none of this.
   let predOffset = null;      // predicted local held-bomb arm offset {x,y}
   let predHolder = false;     // were we the predicted holder last frame?
+  let predDeadAim = null;     // smoothed local copy of the host's slowed ghost aim
   let lastFrameMs = performance.now();
 
   // Override the local player's held-bomb position and weapon/magnify aim in a
@@ -104,7 +109,7 @@
   function applyLocalPrediction(snap, dtMs) {
     if (!snap || !myId) return snap;
     const meIdx = snap.players.findIndex(p => p.id === myId);
-    if (meIdx < 0) { predOffset = null; predHolder = false; return snap; }
+    if (meIdx < 0) { predOffset = null; predHolder = false; predDeadAim = null; return snap; }
     const me = snap.players[meIdx];
     const you = snap.you;
     const st = collector.peek();
@@ -150,10 +155,33 @@
     // Aim: once I've armed a weapon locally, show its pose + sight line pointing
     // at the live mouse immediately, rather than waiting for the host to echo my
     // equip back; also keep an already-confirmed weapon/magnify tracking live.
+    const deadAiming = !!(you && you.deadWeapon && snap.phase === "playing");
+    if (deadAiming) {
+      const auth = (me.aimX != null) ? { x: me.aimX, y: me.aimY } : mouse;
+      if (!predDeadAim ||
+          Math.hypot(predDeadAim.x - auth.x, predDeadAim.y - auth.y) > CONFIG.DeadWeaponAimSpeed) {
+        predDeadAim = auth;
+      }
+      if (st.deadFire) {
+        const dt = Math.min(dtMs, 100) / 1000;
+        const dx = mouse.x - predDeadAim.x, dy = mouse.y - predDeadAim.y;
+        const len = Math.hypot(dx, dy);
+        const maxStep = CONFIG.DeadWeaponAimSpeed * dt;
+        predDeadAim = (len <= maxStep || len < 0.001)
+          ? mouse
+          : { x: predDeadAim.x + dx / len * maxStep, y: predDeadAim.y + dy / len * maxStep };
+      } else {
+        predDeadAim = mouse;
+      }
+      outMe = Object.assign({}, me, { aimX: predDeadAim.x, aimY: predDeadAim.y });
+    } else {
+      predDeadAim = null;
+    }
+
     const armedNow = armedSlot != null && you && you.alive && snap.phase === "playing" && !iAmHolder;
     if (armedNow) {
       outMe = Object.assign({}, me, { equipped: true, aimX: mouse.x, aimY: mouse.y });
-    } else if (me.equipped || me.revealing) {
+    } else if (!deadAiming && (me.equipped || me.revealing)) {
       outMe = Object.assign({}, me, { aimX: mouse.x, aimY: mouse.y });
     }
 
@@ -192,6 +220,31 @@
     const p = canvasPoint(e);
     collector.setMouse(p.x, p.y);
   });
+
+  // While the primary button is held we capture the pointer, which means
+  // browsers may dispatch movement as `pointermove` instead of `mousemove`.
+  // Keep feeding the live cursor into the collector so the ghost gun can
+  // continue its deliberately slow authoritative tracking during charge.
+  canvas.addEventListener("pointermove", e => {
+    const p = canvasPoint(e);
+    collector.setMouse(p.x, p.y);
+  });
+
+  // Once eliminated, primary mouse becomes a held input rather than a click:
+  // one uninterrupted second charges the permanent -5 interference gun.
+  canvas.addEventListener("pointerdown", e => {
+    const you = latestSnap && latestSnap.you;
+    if (e.button !== 0 || !you || !you.deadWeapon || latestSnap.phase !== "playing") return;
+    const p = canvasPoint(e);
+    collector.setMouse(p.x, p.y);
+    collector.setDeadFire(true);
+    if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  const releaseDeadFire = () => collector.setDeadFire(false);
+  canvas.addEventListener("pointerup", releaseDeadFire);
+  canvas.addEventListener("pointercancel", releaseDeadFire);
+  window.addEventListener("blur", releaseDeadFire);
 
   // Projectile cards need a deliberate aim: selecting one "arms" it, and each
   // canvas click fires one shot toward the click point (so a stray
@@ -275,6 +328,7 @@
       // Drop the armed card if it left the hand (used elsewhere, discarded,
       // died, or the phase changed) so the UI never shows a stale aim state.
       const you = latestSnap.you;
+      if (!you || !you.deadWeapon || latestSnap.phase !== "playing") collector.setDeadFire(false);
       const reallyHolding = you && ((you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring)) || you.holdsFake);
       if (armedSlot != null && (!you || !you.hand[armedSlot] || reallyHolding || latestSnap.phase !== "playing")) {
         armedSlot = null;

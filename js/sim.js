@@ -168,6 +168,8 @@ const Sim = (() => {
       seatCount: roster.length,
       teamCount: tc,
       bombTimePool: bombTimePool.slice(),
+      roundNumber: 0,
+      roundCardPool: [],
       players: roster.map((r, i) => ({
         id: r.id,
         name: r.name,
@@ -187,6 +189,9 @@ const Sim = (() => {
         equippedSlot: null,      // hand slot the player is currently aiming (cosmetic, public)
         gunPending: null,        // multi-click gun card mid-use: { cardId, slot, shotsLeft }
         armBuffRemaining: 0,     // Reinforced Arm: free-target + 2x pass speed while > 0
+        deadWeaponCharge: 0,     // eliminated-player interference gun: held charge progress
+        deadWeaponCooldown: 0,   // seconds until another charge may begin
+        deadWeaponCharging: false,
         lastPayoutAmount: 0,     // most recent farmed-pot cash-in, for the private "+N" cue
         lastPayoutSeq: 0,        // bumped every cash-in so the client can detect a new one even if the amount repeats
       })),
@@ -225,6 +230,8 @@ const Sim = (() => {
   // New bomb: draw initial time from the lobby pool, reset all bomb-specific
   // temporary state. Alive players keep coins and cards across bombs.
   function spawnBomb(sim) {
+    sim.roundNumber++;
+    sim.roundCardPool = Cards.rollRoundPool(sim.roundCardPool);
     const pool = sim.bombTimePool;
     const t = pool[Math.floor(Math.random() * pool.length)];
     // Pick the initial holder now and start it traveling there right away, so
@@ -265,6 +272,8 @@ const Sim = (() => {
       p.holdElapsed = 0;
       p.gunPending = null;
       p.armBuffRemaining = 0;
+      p.deadWeaponCharge = 0;
+      p.deadWeaponCharging = false;
     }
     sim.phase = "reveal";
     sim.phaseTimer = C.InitialTimeRevealDuration;
@@ -291,11 +300,16 @@ const Sim = (() => {
       p.revealRemaining = 0;
       p.gunPending = null;
       p.armBuffRemaining = 0;
+      p.deadWeaponCharge = 0;
+      p.deadWeaponCooldown = 0;
+      p.deadWeaponCharging = false;
       p.lastPayoutAmount = 0;
       p.lastPayoutSeq = 0;
     }
     sim.winnerId = null;
     sim.winningTeam = null;
+    sim.roundNumber = 0;
+    sim.roundCardPool = [];
     // Back to a clean opening: reveal phase, bomb travelling in from center.
     // Works whether the rematch was fired at match-over or mid-round.
     sim.phase = "reveal";
@@ -447,6 +461,12 @@ const Sim = (() => {
     player.gunPending = null;
     player.equippedSlot = null;
     player.armBuffRemaining = 0;
+    // Elimination permanently equips the interference gun for the rest of
+    // this match. It starts ready, but can only charge while a bomb is in
+    // active play.
+    player.deadWeaponCharge = 0;
+    player.deadWeaponCooldown = 0;
+    player.deadWeaponCharging = false;
     // A decoy in a dead player's hands vanishes with them; one they already
     // passed away is mid-flight and settles on arrival as usual.
     sim.fakeBombs = sim.fakeBombs.filter(f => f.transfer || f.holderId !== player.id);
@@ -537,13 +557,15 @@ const Sim = (() => {
     if (p.coins < C.CardDrawCost) return;
     const slot = p.hand.indexOf(null);
     if (slot === -1) return; // hand full: no draw, no charge
-    p.coins -= C.CardDrawCost;
     // While bombs in play (real + fakes) are at the player-count cap, Fake
     // Bomb leaves the draw pool entirely — the card would be unusable dead
     // weight, so it can't even be drawn until a slot frees up.
     const bombsInPlay = (sim.bomb ? 1 : 0) + sim.fakeBombs.length;
     const exclude = bombsInPlay >= sim.players.length ? ["fakebomb"] : null;
-    p.hand[slot] = Cards.rollCard(exclude);        // host decides which card
+    const cardId = Cards.rollCard(exclude, sim.roundCardPool);
+    if (!cardId) return;
+    p.coins -= C.CardDrawCost;
+    p.hand[slot] = cardId;                         // host decides which card
     addEvent(sim, `${p.name} drew a card`);
   }
 
@@ -833,11 +855,31 @@ const Sim = (() => {
   function step(sim, inputs, dt) {
     sim.time += dt;
 
-    // Aim/mouse is always recorded, in every phase.
+    // Aim/mouse is always recorded. Eliminated players can pre-aim freely,
+    // but while holding their interference gun's trigger the authoritative
+    // aim crawls toward the cursor instead of snapping to it.
     for (const p of sim.players) {
       const inp = inputs[p.id];
-      if (inp && inp.mx != null) p.aim = { x: inp.mx, y: inp.my };
+      if (!inp || inp.mx == null) continue;
+      const slowDeadAim = !p.alive && !p.disconnected && sim.phase === "playing" && !!inp.deadFire;
+      if (!slowDeadAim) {
+        p.aim = { x: inp.mx, y: inp.my };
+        continue;
+      }
+      const dx = inp.mx - p.aim.x, dy = inp.my - p.aim.y;
+      const len = Math.hypot(dx, dy);
+      const maxStep = C.DeadWeaponAimSpeed * dt;
+      if (len <= maxStep || len < 0.001) {
+        p.aim = { x: inp.mx, y: inp.my };
+      } else {
+        p.aim = {
+          x: p.aim.x + dx / len * maxStep,
+          y: p.aim.y + dy / len * maxStep,
+        };
+      }
     }
+
+    stepDeadWeapons(sim, inputs, dt);
 
     switch (sim.phase) {
       case "reveal":
@@ -886,6 +928,38 @@ const Sim = (() => {
 
       case "matchover":
         break; // waits for the host to trigger resetMatch()
+    }
+  }
+
+  // Eliminated players retain one permanent disruption tool: hold primary
+  // fire for a full charge, then launch a normal -5 projectile. Releasing
+  // early loses the charge; after a shot, the full cooldown must finish
+  // before a new charge can begin. Because fireProjectile and collision are
+  // shared with card guns, shields, frozen bombs, fake bombs and walls all
+  // react through the exact same authoritative rules.
+  function stepDeadWeapons(sim, inputs, dt) {
+    for (const p of sim.players) {
+      if (p.alive || p.disconnected) continue;
+
+      p.deadWeaponCooldown = Math.max(0, p.deadWeaponCooldown - dt);
+      const inp = inputs[p.id] || {};
+      const canCharge = sim.phase === "playing" && !!sim.bomb &&
+        p.deadWeaponCooldown <= 0 && !!inp.deadFire;
+
+      p.deadWeaponCharging = canCharge;
+      if (!canCharge) {
+        p.deadWeaponCharge = 0;
+        continue;
+      }
+
+      p.deadWeaponCharge += dt;
+      if (p.deadWeaponCharge + 1e-9 < C.DeadWeaponChargeTime) continue;
+
+      p.deadWeaponCharge = 0;
+      p.deadWeaponCharging = false;
+      p.deadWeaponCooldown = C.DeadWeaponCooldown;
+      fireProjectile(sim, p, C.DeadWeaponAmount);
+      addEvent(sim, `${p.name} fired a ghost shot`);
     }
   }
 
@@ -1160,6 +1234,8 @@ const Sim = (() => {
       time: sim.time,
       seatCount: sim.seatCount,
       teamCount: sim.teamCount,
+      roundNumber: sim.roundNumber,
+      roundCardPool: sim.roundCardPool.slice(),
       winnerId: sim.winnerId,
       winningTeam: sim.winningTeam,
       winnerName: sim.teamCount > 1
@@ -1220,11 +1296,12 @@ const Sim = (() => {
           // identical to how the real bomb reveals so a fake stays hidden:
           //   1. the creator's brief peek right after pulling it out, and
           //   2. anyone sweeping a live Magnifying Glass box-cast over it
-          //      (or any spectator, who sees every timer).
+          //      Dead players can now interfere with the match, so they no
+          //      longer receive the old spectator-only hidden-time privilege.
           privateRemaining: (
             (f.revealTo === viewerId && f.revealRemaining > 0) ||
             (viewer && sim.phase === "playing" &&
-              (!viewer.alive || (viewer.revealRemaining > 0 && magnifyCoversPos(sim, viewer, pos))))
+              viewer.alive && viewer.revealRemaining > 0 && magnifyCoversPos(sim, viewer, pos))
           ) ? f.remaining : null,
         };
       }),
@@ -1232,6 +1309,7 @@ const Sim = (() => {
         const seat = seatPosition(p.seat, sim.seatCount);
         const equipped = p.equippedSlot != null;
         const revealing = p.revealRemaining > 0;
+        const deadWeapon = !p.alive && !p.disconnected;
         // Real or fake — a bomb in this player's charge (holderId-based, so
         // it holds through a pass) lights the same income cue, so the coin
         // trickle can't be used to tell a decoy from the real bomb.
@@ -1239,11 +1317,16 @@ const Sim = (() => {
         return {
           id: p.id, name: p.name, seat: p.seat, team: p.team, x: seat.x, y: seat.y, alive: p.alive,
           equipped,                          // wielding a throwable/gun card — visible to everyone
+          deadWeapon,                        // permanent interference gun after elimination
+          deadWeaponCharging: deadWeapon && p.deadWeaponCharging,
+          deadWeaponCharge: deadWeapon
+            ? Math.min(1, p.deadWeaponCharge / C.DeadWeaponChargeTime) : 0,
+          deadWeaponCooldown: deadWeapon ? p.deadWeaponCooldown : 0,
           // Aim direction is public whenever a weapon or the magnifying glass
           // box-cast is out — everyone can see *where* it's pointed, never
           // the private reading it gives its owner.
-          aimX: (equipped || revealing) ? p.aim.x : null,
-          aimY: (equipped || revealing) ? p.aim.y : null,
+          aimX: (equipped || revealing || deadWeapon) ? p.aim.x : null,
+          aimY: (equipped || revealing || deadWeapon) ? p.aim.y : null,
           revealing,                         // using a Magnifying Glass right now — visible to everyone (not the reading itself)
           // Currently inside the holder-bonus income window — visible to
           // everyone so the extra coin trickle can be shown as a particle cue.
@@ -1270,6 +1353,11 @@ const Sim = (() => {
         // hands-full card locks) can treat a fake exactly like the real one.
         holdsFake: !!fakeHeldBy(sim, viewerId),
         fakePassing: sim.fakeBombs.some(f => f.holderId === viewerId && f.transfer),
+        deadWeapon: !viewer.alive && !viewer.disconnected,
+        deadWeaponCharging: !viewer.alive && viewer.deadWeaponCharging,
+        deadWeaponCharge: !viewer.alive
+          ? Math.min(1, viewer.deadWeaponCharge / C.DeadWeaponChargeTime) : 0,
+        deadWeaponCooldown: !viewer.alive ? viewer.deadWeaponCooldown : 0,
         // Present once at least one shot of a multi-click gun has already
         // been fired: canceling now must discard the unfired rounds rather
         // than leaving the card untouched.
@@ -1277,12 +1365,11 @@ const Sim = (() => {
         passLock: viewer.passLock,
         canPass: !!(sim.phase === "playing" && viewer.passLock <= 0 &&
           ((b && !b.transfer && b.holderId === viewerId) || fakeHeldBy(sim, viewerId))),
-        // Spectators (eliminated, waiting out the match) always see the exact
-        // bomb time — they can no longer affect gameplay, so there's nothing
-        // left to hide from them. Living players need an active Magnifying
-        // Glass window *and* their box-cast actually over the bomb this tick.
-        reveal: (b && sim.phase === "playing" &&
-            (!viewer.alive || (viewer.revealRemaining > 0 && magnifyCoversPos(sim, viewer, bombPos))))
+        // Eliminated players can now shoot the bomb, so hidden time stays
+        // hidden from them too. Only a living player's active Magnifying
+        // Glass window may include the private reading.
+        reveal: (b && sim.phase === "playing" && viewer.alive &&
+            viewer.revealRemaining > 0 && magnifyCoversPos(sim, viewer, bombPos))
           ? { remaining: viewer.revealRemaining, bombTime: b.remaining }
           : null,
         // Private farmed-pot cash-in cue: bumps `seq` every payout so the
@@ -1318,6 +1405,8 @@ const Sim = (() => {
     }
     return {
       phase: sim.phase,
+      roundNumber: sim.roundNumber,
+      roundCardPool: sim.roundCardPool.slice(),
       teamCount: sim.teamCount,
       winningTeam: sim.winningTeam,
       bombRemaining: b ? b.remaining : null,

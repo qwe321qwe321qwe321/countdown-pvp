@@ -91,6 +91,12 @@ const CONFIG = {
   GunBurstCount: 3,                       // -Time Gun cards can be fired this many separate times per use
   AimLineLength: 520,                     // how far a wielded weapon's sight line reaches
 
+  // ---- Eliminated-player interference weapon ----
+  DeadWeaponChargeTime: 1.0,              // hold primary fire this long to launch one shot
+  DeadWeaponCooldown: 2.0,                // cooldown begins after the shot; charging cannot overlap it
+  DeadWeaponAmount: -5,                   // seconds removed when the projectile touches a bomb
+  DeadWeaponAimSpeed: 150,                // world units/sec while primary fire is held (deliberately sluggish)
+
   // ---- Grapple Claw ----
   GrappleFireSpeed: 3200,                 // fast outbound throw
   GrappleRetractSpeed: 260,               // normal-speed reel-in once it latches (same order as BombArmMoveSpeed)

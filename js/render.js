@@ -95,6 +95,10 @@ const Render = (() => {
       // see — and since both their hands are busy, they can't be the bomb
       // holder at the same time.
       if (p.alive && p.equipped) drawWeaponPose(ctx, p, cx, cy, snap);
+      // Eliminated players keep a permanent ghost gun. Its direction,
+      // charge-up and cooldown are public so the living players can read and
+      // react to the incoming interference rather than being blindsided.
+      if (!p.alive && p.deadWeapon) drawDeadWeaponPose(ctx, p, cx, cy);
 
       // Everyone can see *that* a player is using a Magnifying Glass, and
       // where its box-cast is pointed — just never the reading it gives them.
@@ -316,6 +320,63 @@ const Render = (() => {
     ctx.beginPath();
     ctx.moveTo(hx, hy);
     ctx.lineTo(hx + dx * C.AimLineLength, hy + dy * C.AimLineLength);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawDeadWeaponPose(ctx, p, cx, cy) {
+    let dx = p.aimX != null ? p.aimX - p.x : cx - p.x;
+    let dy = p.aimY != null ? p.aimY - p.y : cy - p.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    const hx = p.x + dx * (C.PlayerBodyRadius + 20);
+    const hy = p.y + dy * (C.PlayerBodyRadius + 20);
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = p.deadWeaponCharging ? "#d58cff" : "#7f6b91";
+    ctx.beginPath();
+    ctx.moveTo(p.x + dx * 5, p.y + dy * 5);
+    ctx.lineTo(hx, hy);
+    ctx.stroke();
+
+    // Permanent gun body and its muzzle glow.
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = "#caa5e8";
+    ctx.beginPath();
+    ctx.moveTo(hx - dx * 6, hy - dy * 6);
+    ctx.lineTo(hx + dx * 12, hy + dy * 12);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(hx + dx * 13, hy + dy * 13, 4 + p.deadWeaponCharge * 7, 0, Math.PI * 2);
+    ctx.fillStyle = p.deadWeaponCharging
+      ? `rgba(220,140,255,${0.35 + p.deadWeaponCharge * 0.65})`
+      : "rgba(150,120,170,0.45)";
+    ctx.fill();
+
+    // Sluggish public sight line; brighter as the one-second charge fills.
+    ctx.setLineDash([7, 10]);
+    ctx.lineWidth = 1.5 + p.deadWeaponCharge * 1.5;
+    ctx.strokeStyle = p.deadWeaponCharging
+      ? `rgba(220,160,255,${0.35 + p.deadWeaponCharge * 0.55})`
+      : "rgba(180,150,195,0.25)";
+    ctx.beginPath();
+    ctx.moveTo(hx + dx * 13, hy + dy * 13);
+    ctx.lineTo(hx + dx * C.AimLineLength, hy + dy * C.AimLineLength);
+    ctx.stroke();
+
+    // Cooldown arc empties clockwise; the charge arc fills clockwise.
+    const ringX = p.x, ringY = p.y;
+    const progress = p.deadWeaponCooldown > 0
+      ? 1 - Math.min(1, p.deadWeaponCooldown / C.DeadWeaponCooldown)
+      : p.deadWeaponCharge;
+    ctx.setLineDash([]);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = p.deadWeaponCooldown > 0 ? "#7b6b86" : "#d58cff";
+    ctx.beginPath();
+    ctx.arc(ringX, ringY, C.PlayerBodyRadius + 6, -Math.PI / 2,
+      -Math.PI / 2 + Math.PI * 2 * progress);
     ctx.stroke();
     ctx.restore();
   }
@@ -637,10 +698,24 @@ const Render = (() => {
         ctx.fillStyle = "#ff9d5c";
         ctx.fillText(`PASS LOCK: ${snap.you.passLock.toFixed(1)}s`, cx, C.WorldHeight - 24);
       }
+    } else if (snap.you && snap.you.deadWeapon && snap.phase === "playing") {
+      ctx.font = "bold 20px sans-serif";
+      if (snap.you.deadWeaponCooldown > 0) {
+        ctx.fillStyle = "#a99bb3";
+        ctx.fillText(`GHOST GUN COOLDOWN: ${snap.you.deadWeaponCooldown.toFixed(1)}s`,
+          cx, C.WorldHeight - 24);
+      } else if (snap.you.deadWeaponCharging) {
+        ctx.fillStyle = "#dca0ff";
+        ctx.fillText(`CHARGING GHOST SHOT: ${Math.round(snap.you.deadWeaponCharge * 100)}%`,
+          cx, C.WorldHeight - 24);
+      } else {
+        ctx.fillStyle = "#dca0ff";
+        ctx.fillText("HOLD LEFT MOUSE 1s — FIRE -5 GHOST SHOT", cx, C.WorldHeight - 24);
+      }
     } else if (snap.you && !snap.you.alive && snap.phase !== "matchover") {
       ctx.font = "bold 20px sans-serif";
       ctx.fillStyle = "#9aa4b2";
-      ctx.fillText("SPECTATOR", cx, C.WorldHeight - 24);
+      ctx.fillText("GHOST GUN STANDBY", cx, C.WorldHeight - 24);
     }
   }
 
@@ -680,7 +755,13 @@ const Render = (() => {
       dom.statusLine.textContent = "";
     }
 
-    if (dom.aimHint) dom.aimHint.style.display = hooks.armedSlot != null ? "block" : "none";
+    if (dom.aimHint) {
+      const deadWeaponActive = !!(you && you.deadWeapon && snap.phase === "playing");
+      dom.aimHint.style.display = (hooks.armedSlot != null || deadWeaponActive) ? "block" : "none";
+      dom.aimHint.textContent = deadWeaponActive
+        ? "👻 GHOST GUN — hold left mouse 1s to fire -5; aim is heavily slowed while held; 2s cooldown"
+        : "🎯 AIMING — click the table to fire, right-click/Esc to cancel";
+    }
 
     // Hand slots (rebuild only when contents/usability/armed state changes).
     if (you) {

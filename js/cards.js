@@ -36,13 +36,69 @@ const Cards = (() => {
       desc: `Pull out a decoy only you know is fake — its timer is shown to you alone for ${CONFIG.FakeBombRevealDuration}s. It's held, passed, shot and grappled exactly like the real bomb, but pops harmlessly. Needs free hands.` },
   };
 
+  // Every bomb/round gets its own four-card draw pool:
+  //   Magnifying Glass (fixed) + one attack + one defense + one other card.
+  // Zero-weight cards stay disabled even if they appear in a category below,
+  // so CONFIG remains the switch that controls which variants are in use.
+  const ROUND_ATTACK_IDS = [
+    "gun1", "gun3", "gun5", "speedup", "reinforced", "grapple", "fakebomb",
+  ];
+  const ROUND_DEFENSE_IDS = ["slowdown", "repair5"];
+
+  function randomFrom(ids) {
+    return ids[Math.floor(Math.random() * ids.length)];
+  }
+
+  function sameCardSet(a, b) {
+    return !!a && a.length === b.length && a.every(id => b.includes(id));
+  }
+
+  function buildRoundPool() {
+    const weights = CONFIG.CardDropWeights;
+    const enabled = id => !!TYPES[id] && (weights[id] || 0) > 0;
+    const attackIds = ROUND_ATTACK_IDS.filter(enabled);
+    const defenseIds = ROUND_DEFENSE_IDS.filter(enabled);
+    if (!enabled("magnify") || !attackIds.length || !defenseIds.length) {
+      throw new Error("Round card pool needs Magnifying Glass plus an enabled attack and defense card");
+    }
+
+    const chosen = ["magnify", randomFrom(attackIds), randomFrom(defenseIds)];
+    const randomIds = Object.keys(TYPES).filter(id => enabled(id) && !chosen.includes(id));
+    if (!randomIds.length) {
+      throw new Error("Round card pool needs a fourth enabled, non-duplicate card");
+    }
+    chosen.push(randomFrom(randomIds));
+    return chosen;
+  }
+
+  // Re-roll at the start of every round. When the configured card set has
+  // enough variety, avoid showing the exact same four-item set twice in a row.
+  function rollRoundPool(previousPool) {
+    let pool = buildRoundPool();
+    for (let i = 0; previousPool && sameCardSet(pool, previousPool) && i < 24; i++) {
+      pool = buildRoundPool();
+    }
+    if (previousPool && sameCardSet(pool, previousPool)) {
+      const replacement = Object.keys(TYPES).find(id =>
+        (CONFIG.CardDropWeights[id] || 0) > 0 &&
+        !pool.slice(0, 3).includes(id) &&
+        !previousPool.includes(id));
+      if (replacement) pool[3] = replacement;
+    }
+    return pool;
+  }
+
   // Weighted random draw over CONFIG.CardDropWeights. Host-only.
   // `excludeIds` drops cards from this roll entirely (e.g. Fake Bomb while
-  // bombs in play are at the cap) — the remaining weights renormalize.
-  function rollCard(excludeIds) {
+  // bombs in play are at the cap); `allowedIds` limits the roll to this
+  // round's four-card pool. The remaining weights renormalize.
+  function rollCard(excludeIds, allowedIds) {
     const weights = CONFIG.CardDropWeights;
     const ids = Object.keys(weights).filter(id =>
-      weights[id] > 0 && !(excludeIds && excludeIds.includes(id)));
+      weights[id] > 0 &&
+      !(excludeIds && excludeIds.includes(id)) &&
+      (!allowedIds || allowedIds.includes(id)));
+    if (!ids.length) return null;
     const total = ids.reduce((s, id) => s + weights[id], 0);
     let r = Math.random() * total;
     for (const id of ids) {
@@ -52,5 +108,5 @@ const Cards = (() => {
     return ids[ids.length - 1];
   }
 
-  return { TYPES, rollCard };
+  return { TYPES, ROUND_ATTACK_IDS, ROUND_DEFENSE_IDS, rollRoundPool, rollCard };
 })();

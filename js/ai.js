@@ -21,8 +21,22 @@ const AI = (() => {
   }
 
   function botInput(sim, player, brain) {
-    const inp = { mx: player.aim.x, my: player.aim.y, pass: false, draw: false, use: [] };
-    if (!player.alive) return inp;
+    const inp = {
+      mx: player.aim.x, my: player.aim.y, pass: false, draw: false, use: [],
+      deadFire: false,
+    };
+    if (!player.alive) {
+      // Dead bots use the same permanent interference weapon as humans. They
+      // keep holding to auto-cycle charge -> cooldown -> charge, while the
+      // host applies the same sluggish aim tracking and projectile rules.
+      if (sim.phase === "playing" && sim.bomb) {
+        const bombPos = Sim.bombWorldPos(sim);
+        inp.mx = bombPos.x;
+        inp.my = bombPos.y;
+        inp.deadFire = true;
+      }
+      return inp;
+    }
 
     // Draw whenever affordable (lightly throttled by chance per tick).
     if (player.coins >= C.CardDrawCost && player.hand.includes(null) && Math.random() < 0.01) {
