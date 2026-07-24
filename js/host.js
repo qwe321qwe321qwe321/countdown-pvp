@@ -22,6 +22,7 @@ const Host = (() => {
     let teamCount = C.DefaultTeamCount;
     let modes = {
       publicSeconds: false, doubleBomb: false, roguelikeShop: false,
+      roguelikeRerollRefresh: false,
       wobblyHitscan: false, nonRefillingBombPot: false,
       shockGunJamDuration: C.ShockGunJamDurationDefault,
       useEmpCard: false,
@@ -157,6 +158,8 @@ const Host = (() => {
         publicSeconds: !!(nextModes && nextModes.publicSeconds),
         doubleBomb: !!(nextModes && nextModes.doubleBomb),
         roguelikeShop: !!(nextModes && nextModes.roguelikeShop),
+        roguelikeRerollRefresh: !!(nextModes && nextModes.roguelikeShop &&
+          nextModes.roguelikeRerollRefresh),
         wobblyHitscan: !!(nextModes && nextModes.wobblyHitscan),
         nonRefillingBombPot: !!(nextModes && nextModes.nonRefillingBombPot),
         shockGunJamDuration: Math.round(

@@ -1400,7 +1400,11 @@ const Render = (() => {
         const hasRoom = you.hand.includes(null);
         const needed = Math.max(0, C.CardDrawCost - you.coins);
         dom.autoBuyStatus.textContent = shopMode
-          ? (!you.alive ? "Shop unavailable" : "Pick 1–3 · reroll with 4")
+          ? (!you.alive
+            ? "Shop unavailable"
+            : snap.modes.roguelikeRerollRefresh
+              ? "Use 1–3 · empty choices stay empty · refresh all with 4"
+              : "Pick 1–3 · reroll with 4")
           : !you.alive ? "Auto-buy paused"
           : !hasRoom ? "Hand full"
           : needed > 0 ? `Auto-buy in ${needed}c`

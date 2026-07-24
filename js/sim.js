@@ -214,6 +214,8 @@ const Sim = (() => {
       publicSeconds: !!(requestedModes && requestedModes.publicSeconds),
       doubleBomb: !!(requestedModes && requestedModes.doubleBomb),
       roguelikeShop: !!(requestedModes && requestedModes.roguelikeShop),
+      roguelikeRerollRefresh: !!(requestedModes && requestedModes.roguelikeShop &&
+        requestedModes.roguelikeRerollRefresh),
       wobblyHitscan: !!(requestedModes && requestedModes.wobblyHitscan),
       nonRefillingBombPot: !!(requestedModes && requestedModes.nonRefillingBombPot),
       shockGunJamDuration: Math.round(
@@ -414,6 +416,7 @@ const Sim = (() => {
       p.passiveAcc = 0;
       p.holderAcc = 0;
       p.holdElapsed = 0;
+      const interruptedGunSlot = p.gunPending ? p.gunPending.slot : null;
       p.gunPending = null;
       p.armBuffRemaining = 0;
       p.deadWeaponCharge = 0;
@@ -421,9 +424,15 @@ const Sim = (() => {
       p.taunting = false;
       p.resolvedParryIds.clear();
       if (sim.modes.roguelikeShop && p.alive) {
-        for (const slot of [...p.shopPaidSlots]) refillShopChoice(sim, p, slot, false);
+        if (sim.modes.roguelikeRerollRefresh) {
+          // A partly fired magazine was already used. End it as an empty
+          // choice instead of silently restoring a full magazine next round.
+          if (Number.isInteger(interruptedGunSlot)) consumeCard(sim, p, interruptedGunSlot);
+        } else {
+          for (const slot of [...p.shopPaidSlots]) refillShopChoice(sim, p, slot, false);
+        }
       }
-      p.shopPaidSlots.clear();
+      if (!sim.modes.roguelikeRerollRefresh) p.shopPaidSlots.clear();
       // Eliminated players get a fresh ghost item each round, sitting right
       // in hand slot 1 like any other card — usable via the normal card UI.
       if (!p.alive) p.hand[0] = rollDeadGlobalItem();
@@ -944,7 +953,8 @@ const Sim = (() => {
     p.hand[slot] = null;
     p.handSlotVersions[slot]++;
     if (sim.modes.roguelikeShop && p.alive && slot < C.RoguelikeChoiceCount) {
-      refillShopChoice(sim, p, slot, true);
+      p.shopPaidSlots.delete(slot);
+      if (!sim.modes.roguelikeRerollRefresh) refillShopChoice(sim, p, slot, true);
     }
   }
 

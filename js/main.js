@@ -550,6 +550,7 @@
     configureShockGunDurationInput();
     syncModeChecks({
       publicSeconds: false, doubleBomb: false, roguelikeShop: false,
+      roguelikeRerollRefresh: false,
       wobblyHitscan: false, nonRefillingBombPot: false,
       shockGunJamDuration: CONFIG.ShockGunJamDurationDefault,
       useEmpCard: false,
@@ -597,6 +598,7 @@
       publicSeconds: $("modePublicSeconds").checked,
       doubleBomb: $("modeDoubleBomb").checked,
       roguelikeShop: $("modeRoguelikeShop").checked,
+      roguelikeRerollRefresh: $("modeRoguelikeRerollRefresh").checked,
       wobblyHitscan: $("modeWobblyHitscan").checked,
       nonRefillingBombPot: $("modeNonRefillingBombPot").checked,
       shockGunJamDuration: Number($("shockGunJamDuration").value),
@@ -617,6 +619,9 @@
     $("modePublicSeconds").checked = !!modes.publicSeconds;
     $("modeDoubleBomb").checked = !!modes.doubleBomb;
     $("modeRoguelikeShop").checked = !!modes.roguelikeShop;
+    $("modeRoguelikeRerollRefresh").checked =
+      !!(modes.roguelikeShop && modes.roguelikeRerollRefresh);
+    $("modeRoguelikeRerollRefresh").disabled = !modes.roguelikeShop;
     $("modeWobblyHitscan").checked = !!modes.wobblyHitscan;
     $("modeNonRefillingBombPot").checked = !!modes.nonRefillingBombPot;
     $("modeEmpCard").checked = !!modes.useEmpCard;
@@ -627,7 +632,8 @@
   }
 
   for (const id of [
-    "modePublicSeconds", "modeDoubleBomb", "modeRoguelikeShop", "modeWobblyHitscan",
+    "modePublicSeconds", "modeDoubleBomb", "modeRoguelikeShop",
+    "modeRoguelikeRerollRefresh", "modeWobblyHitscan",
     "modeNonRefillingBombPot", "shockGunJamDuration", "modeEmpCard",
   ]) {
     $(id).onchange = () => {
@@ -703,7 +709,11 @@
           labels.push(`Public seconds · ${jamCard} ${modes.shockGunJamDuration || CONFIG.ShockGunJamDurationDefault}s`);
         }
         if (modes.doubleBomb) labels.push("Double bomb");
-        if (modes.roguelikeShop) labels.push("Roguelike shop");
+        if (modes.roguelikeShop) {
+          labels.push(modes.roguelikeRerollRefresh
+            ? "Roguelike shop · reroll-only refresh"
+            : "Roguelike shop");
+        }
         if (modes.wobblyHitscan) labels.push("Wobbly hitscan");
         if (modes.nonRefillingBombPot) labels.push("One-time $10 bomb pot");
         $("clientTeamInfo").textContent = labels.join(" · ");
