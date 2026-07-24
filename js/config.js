@@ -79,7 +79,7 @@ const CONFIG = {
     grapple: 8,
     reinforced: 6,
     fakebomb: 3,
-    blackout: 7,
+    blackout: 0,                          // temporarily disabled
     reverse: 7,
   },
 
@@ -123,7 +123,7 @@ const CONFIG = {
   BlackoutDuration: 3.0,
   BlackoutFadeDuration: 0.35,
   BlackoutVisionRadius: 95,                // close to BombArmReach, with a little room for the body
-  DeadGlobalItemIds: ["speedup", "slowdown", "blackout", "reverse"],
+  DeadGlobalItemIds: ["speedup", "slowdown", "reverse"],
 
   // ---- Grapple Claw ----
   GrappleFireSpeed: 3200,                 // fast outbound throw
