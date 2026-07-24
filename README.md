@@ -2,8 +2,8 @@
 
 Implementation of `docs/prototype_plan.md`: a 2D top-down, Liar's-Bar-style PvP prototype.
 All players sit **fixed in their seats around a table for the entire match** — there is no
-movement, no HP, no combat system. The only physical interaction is mouse-controlled arms
-moving the bomb, real 2D projectiles, and the coin → random card economy.
+movement or HP. The physical interaction is mouse-controlled arms moving the bomb,
+real 2D projectiles, a charged sling shot, and an automatic coin → card economy.
 
 ## Run
 
@@ -22,27 +22,28 @@ host lobby and play solo for testing.
 
 | Input | Effect |
 | --- | --- |
-| Mouse | Holding the bomb: drag your arms — the bomb follows, clamped to `BombArmReach` (dodge minus-time shots, catch repair shots, hide the bomb behind your body). Not holding: aim your next projectile card. |
-| Hold/release left mouse after elimination | Hold for 2 seconds to charge the permanent Ghost Gun, then release at 100% to fire its -5 projectile. Aim is heavily slowed while held; there is no post-shot cooldown. |
+| Mouse | Holding the bomb: drag your arms. Hold left mouse to taunt, lock arm control/passing, and farm the pot at 2× speed. With free hands: hold/release to charge and launch a slower -3s sling shot. |
 | Space | Pass the bomb to the next alive player in seat order (once `PASS LOCK` reaches 0) |
 | 1 / 2 / 3 (or click) | Use the card in that hand slot |
-| R (or Draw button) | Draw a random card for `CardDrawCost` coins, up to `MaxHandSize` |
+| Q after elimination | Use your one randomly assigned global item for the round |
 
-At the start of each bomb/round, the host rolls a new four-card draw pool shared
+Cards are bought automatically whenever an alive player has at least `CardDrawCost`
+coins and an empty hand slot. At the start of each bomb/round, the host rolls a four-card shop pool shared
 by everyone: Magnifying Glass, one attack card, one defense card, and one other
 non-duplicate random card. The right-side codex shows the current round's pool.
+Each player opens with a Magnifying Glass and that opening pool's attack card.
 
 ## Architecture (host authoritative)
 
 One browser (the host) runs the entire simulation; every other browser only sends inputs
-(`{mouse, pass, draw, use}`) and renders the snapshot the host sends back. Clients never
-decide hits, bomb time changes, deaths, or card draws.
+(`{mouse, pass, use, primaryFire, gunFireSlot}`) and renders the snapshot the host sends
+back. Clients never decide hits, bomb time changes, deaths, purchases, or rewards.
 
 - `js/config.js` — every tunable number from the plan (`BombArmReach`, `BaseMinimumHoldTime`,
   `MinimumBombTimeAfterReduction`, speed/shield/curse durations, coin rates, drop weights…).
   Nothing gameplay-relevant is hardcoded elsewhere.
-- `js/cards.js` — the 10-card pool (Magnifying Glass, -1/-3/-5s Guns, +5/+10s Repair Kits,
-  Speed Up / Slow Down Stopwatches, Shield, Curse) and the weighted `rollCard()`.
+- `js/cards.js` — card definitions including the three distinct firearms, repair kits,
+  global timer effects, Shield, Lights Out, Reverse, and the weighted shop roll.
 - `js/sim.js` — the authoritative state machine: bomb-time-pool draw → initial time reveal →
   3-2-1 → hidden timer → random holder → passing/cards/projectiles → explosion → elimination
   → next bomb → last survivor wins, plus `buildSnapshot()` (the only view clients ever get).
@@ -63,37 +64,44 @@ decide hits, bomb time changes, deaths, or card draws.
   snapshot while their private 3 s reveal is active.
 - **Passing**: automatic to the next alive player in seat order (dead players skipped),
   gated by `BaseMinimumHoldTime` pass lock; Curse defers a `CurseMinimumHoldTime` lock onto
-  the *next* receiver, then clears.
+  the *next* receiver, then clears. Reverse toggles the entire order until toggled again or
+  the round ends.
 - **Bomb arm control**: the holder sends only a mouse position; the host computes the bomb
   offset and clamps it to `BombArmReach`. The bomb collider genuinely moves — it can dodge
   shots, catch repair kits, or hide behind the holder's body.
-- **Projectiles**: every gun/repair card fires a real moving projectile (no hitscan). Walls
-  and alive player bodies block it (no damage to players); only touching the bomb collider
-  applies the time change, publicly announced as `-5 SEC` / `+10 SEC` without revealing the
-  remaining time.
+- **Projectiles**: every gun/repair card fires a real moving projectile (no hitscan).
+  Firearm rounds travel faster than the charged sling shot. The -5s gun is a three-round
+  semi-auto, the -3s shotgun has two three-pellet shells, and the -1s machine gun has a
+  ten-round hold-to-fire magazine.
 - **Time rules**: reductions clamp at `MinimumBombTimeAfterReduction` (never explode from a
   hit; natural countdown to 0 still does); no upper limit on bomb time.
 - **Speed modifiers**: Speed Up ×2 / Slow Down ×0.5 override each other completely — no
   stacking of multipliers or durations.
-- **Shield**: holder-only (card stays in hand otherwise); blocks only ±time projectile
-  *effects* on the bomb (projectiles still vanish); does not block Speed, Curse, Magnify,
-  passing, or the natural countdown.
-- **Economy**: integer coins only; passive income for all alive players plus a separate
-  holder bonus (risk vs reward); draws cost coins, capped at `MaxHandSize`, no charge when
-  full; all cards single-use, consumed even on a miss.
+- **Shield**: any living player can activate a five-second personal bubble roughly
+  equal to arm reach; it blocks incoming projectiles and Magnifying Glass readings
+  while the bomb is inside the bubble.
+- **Lights Out**: blacks out the table for three seconds except for each viewer's small
+  personal radius. An active Magnifying Glass becomes a directional flashlight.
+- **Economy**: integer coins only; passive income for alive players and a bomb pot cashed
+  on throw. Purchases happen automatically when affordable. A holder can taunt to farm the
+  pot at 2× speed while surrendering arm and pass control.
+- **Fake Bomb reward**: a fake pops with a distinct confetti/coin effect instead of the
+  lethal blast ring and awards $10 to the closest living player.
+- **Bomb pot damage**: each damaging hit on the real bomb steals up to 2 coins
+  from its banked pot for the shooter, with a public coin-transfer animation
+  (blocked shots do not).
 - **Elimination**: the only death is holding the bomb at 0. Dead players lose coins and
-  cards, but permanently gain a charge-to-fire Ghost Gun for the rest of the match. Its
-  normal projectile can still disrupt the bomb for -5 seconds, while a two-second charge
-  and heavily slowed held aim limit its pressure. Eliminated players always see the exact
-  timers on the real bomb and every fake bomb. Last survivor wins; host can rematch (full
-  reset, everyone back in their original seats).
+  cards, retain the -3s charged sling shot (releasable after one second at 33% speed,
+  scaling linearly to full speed at two seconds), and receive one random global item
+  (Speed Up, Freeze, Lights Out, or Reverse) each round. Eliminated players always see the
+  exact timers on the real bomb and every fake bomb. Last survivor wins; host can rematch.
 - **Debug UI** (checkbox, dev only): exact bomb time, speed/shield/curse state, pass lock,
   passing order, every player's coins/hand, projectile states — never part of normal UI.
 
 ## Testing
 
 The sim is UI-free, so its rules run headless (see the repo history for the check script:
-phases, pass lock, income, draws, projectile hits, floor rule, shield, curse, speed
+phases, pass lock, income, auto-purchases, projectile hits, shield, global effects
 override, hidden-timer snapshot audit, elimination, match reset).
 
 ## Known prototype limits

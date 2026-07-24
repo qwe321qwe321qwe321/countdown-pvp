@@ -48,30 +48,34 @@ const CONFIG = {
   BombHolderCoinInterval: 0.5,
   BombHolderCoinAmount: 1,
   BombHolderPotCap: 10,                   // pot stops growing once it hits this, even if held longer
+  BombBulletCoinLoss: 2,                  // each damaging hit steals this much from the real bomb's pot
+  CoinStealEffectDuration: 0.9,
   BombHolderCoinDuration: 10.0,           // grace window per hold; past it the holder earns nothing at all (stalling penalty)
 
   // ---- Cards ----
   CardDrawCost: 5,
   MaxHandSize: 5,
-  StartingHand: ["magnify", "gun5"],      // every player begins the match with these, for free
+  StartingHand: ["magnify"],              // the opening round's attack card is added after its pool is rolled
   // Three tiers: common utility at 10, the stronger swing cards (Freeze
   // Stopwatch / Grapple Claw / Reinforced Arm) rarer at 6, and Fake Bomb the
-  // rarest of all at 3. Fake Bomb is additionally excluded from draws
-  // entirely while bombs in play are at the cap (see Sim.tryDraw).
+  // rarest of all at 3. Fake Bomb is additionally excluded from automatic
+  // purchases while bombs in play are at the cap.
   CardDropWeights: {
     magnify: 8,
-    gun1: 0,
-    gun3: 0,
+    gun1: 10,
+    gun3: 10,
     gun5: 10,
     repair5: 8,
     repair10: 0,
     speedup: 10,
     slowdown: 6,
-    shield: 0,
+    shield: 8,
     curse: 0,
     grapple: 8,
     reinforced: 6,
     fakebomb: 3,
+    blackout: 7,
+    reverse: 7,
   },
 
   // ---- Geometry (world units = canvas pixels) ----
@@ -85,16 +89,35 @@ const CONFIG = {
   BombArmMoveSpeed: 260,                  // world units/sec the bomb's arm-controlled offset can move — arm motion is not instant
 
   // ---- Projectiles ----
-  ProjectileSpeed: 900,                   // world units/sec — tune this if shots feel too slow/fast
+  ProjectileSpeed: 1450,                  // firearm rounds are deliberately much faster than charged sling shots
+  ChargedProjectileSpeed: 760,             // full two-second charge speed
+  ChargedProjectileMinSpeedMultiplier: 1 / 3, // one-second release starts at one-third speed
   ProjectileRadius: 5,
   MuzzleOffset: 32,                       // spawn distance from body center toward aim
-  GunBurstCount: 3,                       // -Time Gun cards can be fired this many separate times per use
+  Gun5Magazine: 3,                        // semi-auto: three individually aimed rounds
+  Gun5Cooldown: 0.28,
+  Gun3Magazine: 2,                        // shotgun: two trigger pulls
+  Gun3Pellets: 3,
+  Gun3SpreadDegrees: 13,
+  Gun3Cooldown: 0.5,
+  Gun1Magazine: 10,                       // automatic: hold primary fire
+  Gun1FireInterval: 0.09,
   AimLineLength: 520,                     // how far a wielded weapon's sight line reaches
 
-  // ---- Eliminated-player interference weapon ----
-  DeadWeaponChargeTime: 2.0,              // hold this long, then release to launch one shot
-  DeadWeaponAmount: -5,                   // seconds removed when the projectile touches a bomb
-  DeadWeaponAimSpeed: 150,                // world units/sec while primary fire is held (deliberately sluggish)
+  // ---- Universal charged sling shot ----
+  ChargedShotMinimumChargeTime: 1.0,        // release before this cancels; at this point the shot is half speed
+  ChargedShotChargeTime: 2.0,               // full charge reaches ChargedProjectileSpeed
+  ChargedShotAmount: -3,
+  ChargedShotAimSpeed: 150,                // world units/sec while primary fire is held (deliberately sluggish)
+
+  // ---- Holder taunt / farming ----
+  TauntFarmMultiplier: 2.0,                // holding primary fire doubles pot accrual while the pose is maintained
+
+  // ---- Global round effects ----
+  BlackoutDuration: 3.0,
+  BlackoutFadeDuration: 0.35,
+  BlackoutVisionRadius: 95,                // close to BombArmReach, with a little room for the body
+  DeadGlobalItemIds: ["speedup", "slowdown", "blackout", "reverse"],
 
   // ---- Grapple Claw ----
   GrappleFireSpeed: 3200,                 // fast outbound throw
@@ -109,6 +132,8 @@ const CONFIG = {
   FakeBombMaxDuration: 30,
   FakeBombForcedPassLock: 1.0,            // short cooldown after a forced bounce so nobody instantly re-chains
   FakeBombRevealDuration: 3.0,            // the decoy's rolled timer is shown privately to its creator this long
+  FakeBombNearestReward: 10,               // fixed reward paid to the closest living player when the decoy pops
+  FakeBombBurstDuration: 1.25,
 
   // ---- Explosion visuals ----
   // Mid-air detonation sequence (presentation only — the kill itself is

@@ -146,7 +146,7 @@
           <div id="hand"></div>
           <div id="aimHint">🎯 AIMING — click the table to fire, right-click/Esc to cancel</div>
           <div class="row" style="margin-top:8px; justify-content:center">
-            <button id="btnDraw">Draw Card (R)</button>
+            <span id="autoBuyStatus">Auto-buy enabled</span>
             <div id="coinDisplay"></div>
             <button id="btnPass">Pass Bomb (Space)</button>
             <label style="font-size:12px"><input type="checkbox" id="chkDebug"> Debug UI (dev only)</label>
@@ -160,22 +160,23 @@
       </div>
       <div id="infoCol">
         <div class="panel" style="padding:8px">
-          <h2 id="codexTitle">Round Draw Pool</h2>
+          <h2 id="codexTitle">Round Shop Pool</h2>
           <div id="cardCodex"></div>
         </div>
       </div>
     </div>
     <div id="help">
       Players never move — everyone sits at their seat all match.
-      <b>Mouse:</b> holding the bomb → drag your arms to move the bomb (dodge or catch projectiles);
-      otherwise → aim your next projectile card (everyone else can see you wielding it).
+      <b>Mouse:</b> holding the bomb → drag your arms; hold left mouse to taunt, lock your arms, and farm the pot at 2× speed.
+      With free hands, hold/release left mouse for the universal -3s charged sling shot:
+      release after 1s at 33% speed, or keep charging to 2s for full speed.
       <b>Space:</b> pass the bomb to the next alive player once PASS LOCK ends — the bomb then
       takes a moment to travel across the table, and can still go off in transit.
       <b>1-5:</b> use a hand card — projectile cards arm and wait for a click on the table to aim/fire.
       The bomb holder can't wield a weapon at the same time.
-      <b>After death:</b> permanently wield a Ghost Gun — hold left mouse to charge, then release
-      at 100% to fire a -5 projectile. Charging takes 2 seconds, with no cooldown after firing.
-      <b>✕:</b> discard a card without using it. <b>R:</b> draw a card for coins.
+      <b>After death:</b> the same charged sling remains available, and <b>Q</b> uses your one random
+      global item for the round. Coins automatically buy cards whenever there is room in your hand.
+      <b>✕:</b> discard a card without using it.
     </div>
   </div>
 
@@ -184,14 +185,14 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <!-- ?v= cache-buster: bump it whenever the game scripts change, so nobody
      plays a stale mix of old and new code out of the browser cache. -->
-<script src="js/config.js?v=8"></script>
-<script src="js/cards.js?v=8"></script>
-<script src="js/sim.js?v=8"></script>
-<script src="js/ai.js?v=8"></script>
-<script src="js/net.js?v=8"></script>
-<script src="js/host.js?v=8"></script>
-<script src="js/client.js?v=8"></script>
-<script src="js/render.js?v=8"></script>
-<script src="js/main.js?v=8"></script>
+<script src="js/config.js?v=9"></script>
+<script src="js/cards.js?v=9"></script>
+<script src="js/sim.js?v=9"></script>
+<script src="js/ai.js?v=9"></script>
+<script src="js/net.js?v=9"></script>
+<script src="js/host.js?v=9"></script>
+<script src="js/client.js?v=9"></script>
+<script src="js/render.js?v=9"></script>
+<script src="js/main.js?v=9"></script>
 </body>
 </html>

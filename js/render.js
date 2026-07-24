@@ -27,6 +27,26 @@ const Render = (() => {
   let lastPayoutSeq = 0;
   let payoutFloatStart = null;
   let payoutFloatAmount = 0;
+  let payoutFloatSource = null;
+
+  function reinforcedThrowTarget(snap, myId, hoverPoint) {
+    if (!hoverPoint || !snap.you || snap.you.id !== myId || snap.phase !== "playing") return null;
+    const me = snap.players.find(p => p.id === myId);
+    if (!me || !me.alive || !me.armBuffed) return null;
+
+    let heldBomb = null;
+    if (snap.you.isHolder && snap.bomb && !snap.bomb.transferring) {
+      heldBomb = snap.bomb;
+    } else {
+      heldBomb = (snap.fakeBombs || []).find(f => f.holderId === myId && !f.transferring) || null;
+    }
+    if (!heldBomb) return null;
+
+    const target = snap.players.find(p =>
+      p.id !== myId && p.alive &&
+      Math.hypot(p.x - hoverPoint.x, p.y - hoverPoint.y) <= C.PlayerBodyRadius + 18);
+    return target ? { source: heldBomb, target } : null;
+  }
 
   // ---- Canvas --------------------------------------------------------------
 
@@ -46,6 +66,7 @@ const Render = (() => {
     ctx.stroke();
 
     const holder = snap.bomb ? snap.players.find(p => p.id === snap.bomb.holderId) : null;
+    const reinforcedThrow = reinforcedThrowTarget(snap, myId, hoverPoint);
 
     // Staged mid-air explosion: the victim was already eliminated the instant
     // the timer hit 0, but they keep *looking* alive until the blast ring
@@ -95,10 +116,12 @@ const Render = (() => {
       // see — and since both their hands are busy, they can't be the bomb
       // holder at the same time.
       if (p.alive && p.equipped) drawWeaponPose(ctx, p, cx, cy, snap);
-      // Eliminated players keep a permanent ghost gun. Its direction and
+      // Eliminated players keep a permanent charged sling. Its direction and
       // charge-up are public so living players can read and react to the
       // incoming interference rather than being blindsided.
-      if (!p.alive && p.deadWeapon) drawDeadWeaponPose(ctx, p, cx, cy);
+      if (p.chargedWeapon && (!p.alive || p.deadWeaponCharging)) {
+        drawDeadWeaponPose(ctx, p, cx, cy);
+      }
 
       // Everyone can see *that* a player is using a Magnifying Glass, and
       // where its box-cast is pointed — just never the reading it gives them.
@@ -125,14 +148,17 @@ const Render = (() => {
       const target = snap.players.find(p =>
         p.id !== myId && p.alive &&
         Math.hypot(p.x - hoverPoint.x, p.y - hoverPoint.y) <= C.PlayerBodyRadius + 14);
-      if (target) drawPlayerTooltip(ctx, target);
+      if (target && !reinforcedThrow) drawPlayerTooltip(ctx, target);
     }
 
     // Fake decoys: drawn with the identical holder arms + bomb body as the
     // real one — on screen there is simply no way to tell them apart.
     for (const f of snap.fakeBombs) {
       const fHolder = f.holderId ? snap.players.find(p => p.id === f.holderId) : null;
-      if (fHolder && fHolder.alive && !f.transferring) drawArms(ctx, fHolder, f, fHolder.armBuffed, snap);
+      if (fHolder && fHolder.alive && !f.transferring) {
+        if (fHolder.taunting) drawTauntPose(ctx, fHolder, f, snap);
+        else drawArms(ctx, fHolder, f, fHolder.armBuffed, snap);
+      }
       if (f.claw) drawClawTether(ctx, f.clawX, f.clawY, f.x, f.y);
       drawBombBody(ctx, f.x, f.y, snap.time);
       // Creator-only peek at the decoy's timer (only ever present in the
@@ -151,14 +177,20 @@ const Render = (() => {
     // Arms: body -> hands -> bomb, only for the current holder, and only
     // while the bomb isn't mid-flight between seats (nobody's arms are on it).
     if (snap.bomb && !snap.bomb.transferring && holder && holder.alive) {
-      drawArms(ctx, holder, snap.bomb, holder.armBuffed, snap);
+      if (holder.taunting) drawTauntPose(ctx, holder, snap.bomb, snap);
+      else drawArms(ctx, holder, snap.bomb, holder.armBuffed, snap);
     }
 
     // Bomb (with cable + gripping claw while a grapple is reeling it in).
     if (snap.bomb) {
       if (snap.bomb.claw) drawClawTether(ctx, snap.bomb.clawX, snap.bomb.clawY, snap.bomb.x, snap.bomb.y);
-      drawBomb(ctx, snap);
+      drawBomb(ctx, snap, holder);
     }
+
+    // Local-only Reinforced Arm targeting aid. The authoritative throw still
+    // uses the live aim point in sim.js; this simply makes the selected player
+    // and bomb trajectory unmistakable before SPACE is pressed.
+    if (reinforcedThrow) drawReinforcedThrowArrow(ctx, reinforcedThrow, snap);
 
     // Projectiles: red = minus-time, green = plus-time; a flying grapple is
     // a claw head trailing its cable back to where it was thrown from.
@@ -180,13 +212,12 @@ const Render = (() => {
         snap.explosionMidAir ? C.ExplosionHoldDuration : 0);
     }
 
-    // One-shot positioned effects: a fake bomb popping harmlessly — the
-    // exact same blast presentation as the real thing (mid-air pops include
-    // the frozen-at-0 beat), just with nobody to kill.
+    // Fake bombs use a deliberately non-explosive confetti/coin burst so
+    // players can distinguish the bluff reveal from a lethal real blast.
     for (const ef of snap.effects || []) {
-      if (ef.type !== "fakeboom") continue;
       const age = snap.time - ef.time;
-      drawStagedBlast(ctx, ef, null, age, snap.time, ef.midAir ? C.ExplosionHoldDuration : 0);
+      if (ef.type === "fakeboom") drawFakeBombBurst(ctx, ef, age, snap);
+      else if (ef.type === "coinstolen") drawCoinSteal(ctx, ef, age, snap);
     }
 
     // Floating public feedback ("-5 SEC", "SHIELD BLOCKED IT", ...).
@@ -214,6 +245,9 @@ const Render = (() => {
       if (snap.you.payout.seq > 0) {
         payoutFloatStart = snap.time;
         payoutFloatAmount = snap.you.payout.amount;
+        payoutFloatSource = (snap.you.payout.sourceX != null)
+          ? { x: snap.you.payout.sourceX, y: snap.you.payout.sourceY }
+          : null;
       }
     }
     if (payoutFloatStart != null) {
@@ -222,17 +256,53 @@ const Render = (() => {
         const me = snap.players.find(p => p.id === myId);
         if (me) {
           const k = age / PAYOUT_FLOAT_LIFETIME;
-          const scale = 1 + (1 - k) * 0.3;
+          const source = payoutFloatSource || me;
           ctx.save();
-          ctx.font = `bold ${Math.round(30 * scale)}px sans-serif`;
           ctx.textAlign = "center";
-          ctx.fillStyle = `rgba(255,213,76,${1 - k})`;
-          ctx.strokeStyle = `rgba(0,0,0,${0.55 * (1 - k)})`;
-          ctx.lineWidth = 4;
-          const fx = me.x, fy = me.y - C.PlayerBodyRadius - 30 - k * 46;
-          const text = `+${payoutFloatAmount} 💰`;
-          ctx.strokeText(text, fx, fy);
-          ctx.fillText(text, fx, fy);
+          ctx.textBaseline = "middle";
+          // One visible coin per dollar: a full $10 pot produces a satisfying
+          // ten-coin stream, while smaller payouts stay proportional.
+          const coinCount = Math.max(1, Math.round(payoutFloatAmount));
+          for (let i = 0; i < coinCount; i++) {
+            const travel = Math.max(0, Math.min(1, k / 0.62 - i * 0.035));
+            const ease = 1 - Math.pow(1 - travel, 3);
+            const angle = i * 2.39996;
+            const spread = 5 + (i % 4) * 2;
+            const startX = source.x + Math.cos(angle) * spread;
+            const startY = source.y + Math.sin(angle) * spread;
+            const endX = me.x + Math.cos(angle) * 8;
+            const endY = me.y + Math.sin(angle) * 6;
+            const coinX = startX + (endX - startX) * ease;
+            const coinY = startY + (endY - startY) * ease -
+              Math.sin(ease * Math.PI) * (30 + (i % 4) * 7);
+            ctx.globalAlpha = Math.min(1, travel * 7) *
+              Math.max(0, 1 - Math.max(0, k - 0.76) / 0.12);
+            ctx.beginPath();
+            ctx.arc(coinX, coinY, 5.5, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffd54c";
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = "#8a5b00";
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(coinX - 1.5, coinY - 1.5, 1.3, 0, Math.PI * 2);
+            ctx.fillStyle = "#fff1a6";
+            ctx.fill();
+          }
+          if (k >= 0.45) {
+            const labelK = Math.max(0, (k - 0.42) / 0.58);
+            const scale = 1 + (1 - Math.min(1, labelK)) * 0.3;
+            ctx.globalAlpha = 1 - Math.max(0, labelK - 0.72) / 0.28;
+            ctx.font = `bold ${Math.round(30 * scale)}px sans-serif`;
+            ctx.fillStyle = "#ffd54c";
+            ctx.strokeStyle = "rgba(0,0,0,0.7)";
+            ctx.lineWidth = 5;
+            const fx = me.x;
+            const fy = me.y - C.PlayerBodyRadius - 30 - labelK * 34;
+            const text = `+$${payoutFloatAmount}`;
+            ctx.strokeText(text, fx, fy);
+            ctx.fillText(text, fx, fy);
+          }
           ctx.restore();
         }
       } else {
@@ -240,6 +310,7 @@ const Render = (() => {
       }
     }
 
+    drawBlackout(ctx, snap, myId);
     drawOverlays(ctx, snap);
   }
 
@@ -283,6 +354,101 @@ const Render = (() => {
       ctx.fillStyle = col;
       ctx.fill();
     }
+  }
+
+  function drawReinforcedThrowArrow(ctx, selection, snap) {
+    const source = selection.source;
+    const target = selection.target;
+    let dx = target.x - source.x, dy = target.y - source.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001) return;
+    dx /= len; dy /= len;
+
+    const startX = source.x + dx * (C.BombRadius + 8);
+    const startY = source.y + dy * (C.BombRadius + 8);
+    const endX = target.x - dx * (C.PlayerBodyRadius + 12);
+    const endY = target.y - dy * (C.PlayerBodyRadius + 12);
+    const pulse = 0.5 + 0.5 * Math.sin(snap.time * 9);
+    const color = snap.you.canPass ? "#64f4ff" : "#ffd166";
+    const headLength = 20;
+    const headWidth = 12;
+    const px = -dy, py = dx;
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    // Strong dark underlay keeps the trajectory readable over the table,
+    // player colors, projectiles, and the bomb body.
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(endX, endY);
+    ctx.lineWidth = 9;
+    ctx.strokeStyle = "rgba(0,0,0,0.75)";
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(endX, endY);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(endX - dx * headLength + px * headWidth, endY - dy * headLength + py * headWidth);
+    ctx.lineTo(endX - dx * headLength - px * headWidth, endY - dy * headLength - py * headWidth);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(0,0,0,0.8)";
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(target.x, target.y, C.PlayerBodyRadius + 10 + pulse * 4, 0, Math.PI * 2);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+
+    const label = snap.you.canPass
+      ? `SPACE → THROW TO ${target.name}`
+      : `TARGET: ${target.name} · PASS LOCK ${snap.you.passLock.toFixed(1)}s`;
+    ctx.font = "bold 14px sans-serif";
+    ctx.textAlign = "center";
+    const labelWidth = ctx.measureText(label).width + 18;
+    const labelX = target.x;
+    const labelY = target.y + C.PlayerBodyRadius + 38;
+    ctx.fillStyle = "rgba(10,14,20,0.9)";
+    roundRect(ctx, labelX - labelWidth / 2, labelY - 18, labelWidth, 25, 6);
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.fillText(label, labelX, labelY);
+    ctx.restore();
+  }
+
+  function drawTauntPose(ctx, holder, bomb, snap) {
+    const phase = Math.sin(snap.time * 12);
+    const col = colorFor(holder, snap);
+    ctx.save();
+    ctx.lineWidth = 7;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = col;
+    // One hand keeps the bomb close while the other waves theatrically.
+    ctx.beginPath();
+    ctx.moveTo(holder.x - 5, holder.y);
+    ctx.lineTo(bomb.x, bomb.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(holder.x + 6, holder.y);
+    ctx.quadraticCurveTo(holder.x + 34, holder.y - 22 - phase * 8,
+      holder.x + 18 + phase * 10, holder.y - 52);
+    ctx.stroke();
+    ctx.font = "bold 16px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffd54c";
+    ctx.fillText("TAUNT!  ×2 💰", holder.x, holder.y + 48);
+    ctx.restore();
   }
 
   // Public pose for a player who has a projectile card armed: a single raised
@@ -341,12 +507,15 @@ const Render = (() => {
     ctx.lineTo(hx, hy);
     ctx.stroke();
 
-    // Permanent gun body and its muzzle glow.
-    ctx.lineWidth = 5;
+    // Y-shaped sling body and its charged projectile.
+    const px = -dy, py = dx;
+    ctx.lineWidth = 4;
     ctx.strokeStyle = "#caa5e8";
     ctx.beginPath();
-    ctx.moveTo(hx - dx * 6, hy - dy * 6);
-    ctx.lineTo(hx + dx * 12, hy + dy * 12);
+    ctx.moveTo(hx - dx * 7, hy - dy * 7);
+    ctx.lineTo(hx + px * 8, hy + py * 8);
+    ctx.moveTo(hx - dx * 7, hy - dy * 7);
+    ctx.lineTo(hx - px * 8, hy - py * 8);
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(hx + dx * 13, hy + dy * 13, 4 + p.deadWeaponCharge * 7, 0, Math.PI * 2);
@@ -366,16 +535,40 @@ const Render = (() => {
     ctx.lineTo(hx + dx * C.AimLineLength, hy + dy * C.AimLineLength);
     ctx.stroke();
 
-    // Charge arc fills clockwise.
+    // Two-stage charge rings: the first second completes the inner ring and
+    // unlocks the shot; only then does the second/full-power ring begin.
     const ringX = p.x, ringY = p.y;
     const progress = p.deadWeaponCharge;
+    const minimumProgress = C.ChargedShotMinimumChargeTime / C.ChargedShotChargeTime;
+    const firstRingProgress = Math.min(1, progress / minimumProgress);
+    const secondRingProgress = Math.max(0,
+      Math.min(1, (progress - minimumProgress) / (1 - minimumProgress)));
     ctx.setLineDash([]);
     ctx.lineWidth = 3;
-    ctx.strokeStyle = "#d58cff";
+
+    ctx.strokeStyle = "rgba(213,140,255,0.2)";
+    ctx.beginPath();
+    ctx.arc(ringX, ringY, C.PlayerBodyRadius + 6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = firstRingProgress >= 1 ? "#ffd166" : "#d58cff";
     ctx.beginPath();
     ctx.arc(ringX, ringY, C.PlayerBodyRadius + 6, -Math.PI / 2,
-      -Math.PI / 2 + Math.PI * 2 * progress);
+      -Math.PI / 2 + Math.PI * 2 * firstRingProgress);
     ctx.stroke();
+
+    if (progress >= minimumProgress) {
+      ctx.strokeStyle = "rgba(125,255,155,0.2)";
+      ctx.beginPath();
+      ctx.arc(ringX, ringY, C.PlayerBodyRadius + 12, 0, Math.PI * 2);
+      ctx.stroke();
+      if (secondRingProgress > 0) {
+        ctx.strokeStyle = "#7dff9b";
+        ctx.beginPath();
+        ctx.arc(ringX, ringY, C.PlayerBodyRadius + 12, -Math.PI / 2,
+          -Math.PI / 2 + Math.PI * 2 * secondRingProgress);
+        ctx.stroke();
+      }
+    }
     ctx.restore();
   }
 
@@ -455,12 +648,15 @@ const Render = (() => {
     ctx.closePath();
   }
 
-  function drawBomb(ctx, snap) {
+  function drawBomb(ctx, snap, holder) {
     const b = snap.bomb;
-    // Shield ring.
-    if (b.shield) {
+    // Shield ring stays on its owner for the full duration. Whether the bomb
+    // is currently inside that bubble is still decided authoritatively by the
+    // sim; hiding the ring during every pass made the active shield flicker.
+    const shieldOwner = b.shieldOwnerId && snap.players.find(p => p.id === b.shieldOwnerId);
+    if (b.shield && shieldOwner) {
       ctx.beginPath();
-      ctx.arc(b.x, b.y, C.BombRadius + 8, 0, Math.PI * 2);
+      ctx.arc(shieldOwner.x, shieldOwner.y, C.BombArmReach, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(80,160,255,0.18)";
       ctx.fill();
       ctx.lineWidth = 2.5;
@@ -548,7 +744,7 @@ const Render = (() => {
     ctx.fill();
   }
 
-  // Staged blast, used for every explosion real or fake: an optional frozen
+  // Staged lethal blast used only for the real bomb: an optional frozen
   // "0.0s" beat (`hold` seconds — mid-air blasts only), then a ring expands
   // until it reaches the victim (or a default radius when there is no victim
   // to reach), then keeps growing fast while fading out.
@@ -582,6 +778,95 @@ const Render = (() => {
     ctx.strokeStyle = `rgba(255,140,40,${alpha})`;
     ctx.lineWidth = 10;
     ctx.stroke();
+  }
+
+  function drawFakeBombBurst(ctx, ef, age, snap) {
+    if (age < 0 || age > C.FakeBombBurstDuration) return;
+    const k = age / C.FakeBombBurstDuration;
+    const ease = 1 - Math.pow(1 - k, 2);
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.globalAlpha = Math.max(0, 1 - k);
+    const colors = ["#ffd54c", "#7dff9b", "#ff8cc8", "#78c8ff", "#ffffff"];
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * Math.PI * 2 + i * 1.73;
+      const radius = 18 + ease * (55 + (i % 5) * 9);
+      const x = ef.x + Math.cos(a) * radius;
+      const y = ef.y + Math.sin(a) * radius + k * k * 35;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(a + k * 8);
+      ctx.fillStyle = colors[i % colors.length];
+      ctx.fillRect(-4, -2, 8, 4);
+      ctx.restore();
+    }
+    const receiver = ef.rewardPlayerId &&
+      snap.players.find(p => p.id === ef.rewardPlayerId);
+    if (receiver) {
+      // A visible stream of coins travels from the popped decoy to the player
+      // the host selected as nearest, making the fixed reward unambiguous.
+      ctx.font = "18px sans-serif";
+      ctx.fillStyle = "#ffd54c";
+      for (let i = 0; i < 7; i++) {
+        const travel = Math.max(0, Math.min(1, k * 1.45 - i * 0.07));
+        const x = ef.x + (receiver.x - ef.x) * travel;
+        const y = ef.y + (receiver.y - ef.y) * travel -
+          Math.sin(travel * Math.PI) * (28 + i * 3);
+        ctx.fillText("●", x, y);
+      }
+    }
+    ctx.font = `bold ${Math.round(24 + 12 * (1 - k))}px sans-serif`;
+    ctx.fillStyle = "#ffd54c";
+    ctx.strokeStyle = "rgba(0,0,0,0.75)";
+    ctx.lineWidth = 5;
+    const labelY = ef.y - 36 - ease * 28;
+    const label = `FAKE!  +$${ef.reward || C.FakeBombNearestReward}`;
+    ctx.strokeText(label, ef.x, labelY);
+    ctx.fillText(label, ef.x, labelY);
+    ctx.restore();
+  }
+
+  function drawCoinSteal(ctx, ef, age, snap) {
+    if (age < 0 || age > C.CoinStealEffectDuration) return;
+    const receiver = ef.receiverId && snap.players.find(p => p.id === ef.receiverId);
+    if (!receiver) return;
+    const k = Math.min(1, age / C.CoinStealEffectDuration);
+    const travelBase = Math.min(1, k * 1.35);
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 15px sans-serif";
+    const coinCount = Math.max(1, Math.min(C.BombBulletCoinLoss, ef.amount || 0));
+    for (let i = 0; i < coinCount; i++) {
+      const travel = Math.max(0, Math.min(1, travelBase - i * 0.075));
+      const ease = 1 - Math.pow(1 - travel, 2);
+      const x = ef.x + (receiver.x - ef.x) * ease;
+      const y = ef.y + (receiver.y - ef.y) * ease -
+        Math.sin(ease * Math.PI) * (30 + i * 4);
+      ctx.globalAlpha = Math.min(1, travel * 5) * (1 - Math.max(0, k - 0.88) / 0.12);
+      ctx.fillStyle = "#ffd54c";
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#8a5b00";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    if (k > 0.48) {
+      const labelK = (k - 0.48) / 0.52;
+      ctx.globalAlpha = Math.min(1, labelK * 4) * (1 - Math.max(0, labelK - 0.72) / 0.28);
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillStyle = "#ffd54c";
+      ctx.strokeStyle = "rgba(0,0,0,0.8)";
+      ctx.lineWidth = 5;
+      const label = `+$${ef.amount}`;
+      const labelY = receiver.y - C.PlayerBodyRadius - 28 - labelK * 16;
+      ctx.strokeText(label, receiver.x, labelY);
+      ctx.fillText(label, receiver.x, labelY);
+    }
+    ctx.restore();
   }
 
   // ---- Grapple Claw visuals -------------------------------------------------
@@ -664,6 +949,12 @@ const Render = (() => {
       }
     }
 
+    if (snap.reversePassing) {
+      ctx.font = "bold 18px sans-serif";
+      ctx.fillStyle = "#f5a3ff";
+      ctx.fillText("🔄 PASS ORDER REVERSED", cx, 50);
+    }
+
     if (snap.phase === "reveal" && snap.bomb) {
       ctx.font = "bold 42px sans-serif";
       ctx.fillStyle = "#ffce54";
@@ -696,23 +987,93 @@ const Render = (() => {
         ctx.fillStyle = "#ff9d5c";
         ctx.fillText(`PASS LOCK: ${snap.you.passLock.toFixed(1)}s`, cx, C.WorldHeight - 24);
       }
-    } else if (snap.you && snap.you.deadWeapon && snap.phase === "playing") {
+    } else if (snap.you && snap.you.chargedWeaponCharging && snap.phase === "playing") {
       ctx.font = "bold 20px sans-serif";
-      if (snap.you.deadWeaponCharging) {
-        ctx.fillStyle = "#dca0ff";
-        ctx.fillText(snap.you.deadWeaponCharge >= 1
-          ? "GHOST SHOT CHARGED — RELEASE LEFT MOUSE TO FIRE"
-          : `CHARGING GHOST SHOT: ${Math.round(snap.you.deadWeaponCharge * 100)}%`,
-        cx, C.WorldHeight - 24);
+      const progress = snap.you.deadWeaponCharge;
+      const minimumProgress = C.ChargedShotMinimumChargeTime / C.ChargedShotChargeTime;
+      if (progress >= 1) {
+        ctx.fillStyle = "#7dff9b";
+        ctx.fillText("SLING SHOT FULL POWER — RELEASE (100% SPEED)", cx, C.WorldHeight - 24);
+      } else if (progress >= minimumProgress) {
+        const speedProgress = (progress - minimumProgress) / (1 - minimumProgress);
+        const speedPercent = Math.round(100 *
+          (C.ChargedProjectileMinSpeedMultiplier +
+            (1 - C.ChargedProjectileMinSpeedMultiplier) * speedProgress));
+        ctx.fillStyle = "#ffd166";
+        ctx.fillText(`SLING SHOT READY — RELEASE (${speedPercent}% SPEED) · HOLD FOR FULL`,
+          cx, C.WorldHeight - 24);
       } else {
         ctx.fillStyle = "#dca0ff";
-        ctx.fillText("HOLD LEFT MOUSE TO CHARGE — RELEASE AT 100% TO FIRE", cx, C.WorldHeight - 24);
+        const elapsed = progress * C.ChargedShotChargeTime;
+        ctx.fillText(`CHARGING SLING SHOT: ${elapsed.toFixed(1)} / ${C.ChargedShotMinimumChargeTime.toFixed(1)}s`,
+          cx, C.WorldHeight - 24);
       }
     } else if (snap.you && !snap.you.alive && snap.phase !== "matchover") {
       ctx.font = "bold 20px sans-serif";
       ctx.fillStyle = "#9aa4b2";
-      ctx.fillText("GHOST GUN STANDBY", cx, C.WorldHeight - 24);
+      ctx.fillText("GHOST SLING STANDBY", cx, C.WorldHeight - 24);
     }
+  }
+
+  let blackoutCanvas = null;
+  function drawBlackout(ctx, snap, myId) {
+    if (!(snap.blackoutRemaining > 0)) return;
+    if (!blackoutCanvas) {
+      blackoutCanvas = document.createElement("canvas");
+      blackoutCanvas.width = C.WorldWidth;
+      blackoutCanvas.height = C.WorldHeight;
+    }
+    const oc = blackoutCanvas.getContext("2d");
+    oc.clearRect(0, 0, C.WorldWidth, C.WorldHeight);
+    oc.globalCompositeOperation = "source-over";
+    const fade = Math.min(1,
+      (snap.blackoutElapsed || 0) / C.BlackoutFadeDuration,
+      snap.blackoutRemaining / C.BlackoutFadeDuration);
+    // Eliminated players are spectators: Lights Out does not restrict their
+    // vision, but their screen still receives a subdued blackout tint.
+    if (snap.you && !snap.you.alive) {
+      oc.fillStyle = `rgba(0,0,0,${0.55 * fade})`;
+      oc.fillRect(0, 0, C.WorldWidth, C.WorldHeight);
+      ctx.drawImage(blackoutCanvas, 0, 0);
+      return;
+    }
+    oc.fillStyle = `rgba(0,0,0,${0.97 * fade})`;
+    oc.fillRect(0, 0, C.WorldWidth, C.WorldHeight);
+    oc.globalCompositeOperation = "destination-out";
+
+    const me = snap.players.find(p => p.id === myId);
+    if (me) {
+      const radius = C.BlackoutVisionRadius;
+      const glow = oc.createRadialGradient(me.x, me.y, radius * 0.35, me.x, me.y, radius);
+      glow.addColorStop(0, "rgba(0,0,0,1)");
+      glow.addColorStop(0.72, "rgba(0,0,0,0.9)");
+      glow.addColorStop(1, "rgba(0,0,0,0)");
+      oc.fillStyle = glow;
+      oc.beginPath();
+      oc.arc(me.x, me.y, radius, 0, Math.PI * 2);
+      oc.fill();
+
+      // An active Magnifying Glass doubles as a directional flashlight.
+      if (me.revealing && me.aimX != null) {
+        let dx = me.aimX - me.x, dy = me.aimY - me.y;
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len; dy /= len;
+        const px = -dy, py = dx;
+        const half = C.MagnifyCastWidth * 1.4;
+        oc.fillStyle = "rgba(0,0,0,0.95)";
+        oc.beginPath();
+        oc.moveTo(me.x + px * half, me.y + py * half);
+        oc.lineTo(me.x - px * half, me.y - py * half);
+        oc.lineTo(me.x - px * half + dx * C.MagnifyCastLength,
+          me.y - py * half + dy * C.MagnifyCastLength);
+        oc.lineTo(me.x + px * half + dx * C.MagnifyCastLength,
+          me.y + py * half + dy * C.MagnifyCastLength);
+        oc.closePath();
+        oc.fill();
+      }
+    }
+    oc.globalCompositeOperation = "source-over";
+    ctx.drawImage(blackoutCanvas, 0, 0);
   }
 
   // ---- DOM panels ----------------------------------------------------------
@@ -721,20 +1082,21 @@ const Render = (() => {
   let lastCodexSig = null;
   let lastEventSeq = 0;
 
-  // dom: { coinDisplay, statusLine, hand, btnPass, btnDraw, eventLog,
+  // dom: { coinDisplay, statusLine, hand, btnPass, autoBuyStatus, btnDeadItem, eventLog,
   //        cardCodex, codexTitle, debugPanel, matchOverBar, matchOverText, aimHint }
   // hooks: { useCard(slot), discardCard(slot), armedSlot, isHost }
   function updateDom(dom, snap, hooks) {
     const you = snap.you;
+    const me = you ? snap.players.find(p => p.id === you.id) : null;
 
-    // The right-side codex is the authoritative draw pool for this round, not
+    // The right-side codex is the authoritative shop pool for this round, not
     // a static list of every card in the game. Pool order carries its role:
     // fixed Magnifying Glass, attack roll, defense roll, unrestricted roll.
     const roundIds = snap.roundCardPool || [];
     const codexSig = JSON.stringify([snap.roundNumber, roundIds]);
     if (dom.cardCodex && codexSig !== lastCodexSig) {
       lastCodexSig = codexSig;
-      if (dom.codexTitle) dom.codexTitle.textContent = `Round ${snap.roundNumber} Draw Pool`;
+      if (dom.codexTitle) dom.codexTitle.textContent = `Round ${snap.roundNumber} Shop Pool`;
       dom.cardCodex.innerHTML = "";
       const roleNames = ["FIXED", "ATTACK", "DEFENSE", "RANDOM"];
       for (let i = 0; i < roundIds.length; i++) {
@@ -762,7 +1124,6 @@ const Render = (() => {
     }
 
     if (you) {
-      const me = snap.players.find(p => p.id === you.id);
       // Mirrors Sim.coinIntervalScale: scale by the *current* alive count, not
       // the fixed seat count, so the shown rate speeds up as players die.
       const coinScale = Math.max(1, snap.aliveCount) / C.CoinEconomyBaselinePlayers;
@@ -781,18 +1142,25 @@ const Render = (() => {
         ? snap.teamAliveCounts.map((n, i) => `Team ${i + 1}: ${n}`).join("   ·   ")
         : `Alive: ${snap.aliveCount}/${snap.players.length}`;
       dom.statusLine.textContent = aliveText +
-        (snap.bomb ? `   ·   Bomb started at ${snap.bomb.initialTime}s` : "");
+        (snap.bomb ? `   ·   Bomb started at ${snap.bomb.initialTime}s` : "") +
+        (me && me.armBuffed ? "   ·   🦾 Free-target throw active" : "");
     } else {
       dom.coinDisplay.textContent = "";
       dom.statusLine.textContent = "";
     }
 
     if (dom.aimHint) {
-      const deadWeaponActive = !!(you && you.deadWeapon && snap.phase === "playing");
-      dom.aimHint.style.display = (hooks.armedSlot != null || deadWeaponActive) ? "block" : "none";
-      dom.aimHint.textContent = deadWeaponActive
-        ? "👻 GHOST GUN — hold left mouse for 2s, then release at 100% to fire -5; no cooldown"
-        : "🎯 AIMING — click the table to fire, right-click/Esc to cancel";
+      const reinforcedActive = !!(you && me && me.armBuffed && snap.phase === "playing" &&
+        ((you.isHolder && snap.bomb && !snap.bomb.transferring) || you.holdsFake));
+      const chargedActive = !!(you && you.chargedWeapon && hooks.armedSlot == null &&
+        snap.phase === "playing");
+      dom.aimHint.style.display =
+        (reinforcedActive || hooks.armedSlot != null || chargedActive) ? "block" : "none";
+      dom.aimHint.textContent = reinforcedActive
+        ? "🦾 REINFORCED ARM — point at any living player, then press SPACE to throw"
+        : chargedActive
+          ? `🪃 CHARGED SLING — release after ${C.ChargedShotMinimumChargeTime}s at 33% speed, or hold ${C.ChargedShotChargeTime}s for full speed (${C.ChargedShotAmount}s)`
+          : "🎯 AIMING — click to fire (hold for machine gun), right-click/Esc to cancel";
     }
 
     // Hand slots (rebuild only when contents/usability/armed state changes).
@@ -833,8 +1201,14 @@ const Render = (() => {
         }
       }
 
-      dom.btnDraw.disabled = !you.alive || you.coins < C.CardDrawCost || !you.hand.includes(null);
-      dom.btnDraw.textContent = `Draw Card (R) — ${C.CardDrawCost}c`;
+      if (dom.autoBuyStatus) {
+        const hasRoom = you.hand.includes(null);
+        const needed = Math.max(0, C.CardDrawCost - you.coins);
+        dom.autoBuyStatus.textContent = !you.alive ? "Auto-buy paused"
+          : !hasRoom ? "Hand full"
+          : needed > 0 ? `Auto-buy in ${needed}c`
+          : "Auto-buying…";
+      }
 
       // Fake bombs are passed with the same button/key as the real one; the
       // UI deliberately can't tell the difference either.
@@ -843,7 +1217,9 @@ const Render = (() => {
       if (holdsBombNow && snap.phase === "playing") {
         dom.btnPass.disabled = !you.canPass;
         dom.btnPass.textContent = bombInFlight ? "Passing..."
-          : you.canPass ? "Pass Bomb (Space)" : `Pass Lock ${you.passLock.toFixed(1)}s`;
+          : you.canPass
+            ? (me && me.armBuffed ? "Throw to Target (Space)" : "Pass Bomb (Space)")
+            : `Pass Lock ${you.passLock.toFixed(1)}s`;
       } else {
         dom.btnPass.disabled = true;
         dom.btnPass.textContent = "Pass Bomb (Space)";
@@ -887,11 +1263,15 @@ const Render = (() => {
   function slotUsable(snap) {
     const you = snap.you;
     return (slot) => {
-      if (!you.alive || snap.phase !== "playing") return false;
+      if (snap.phase !== "playing") return false;
       const cardId = you.hand[slot];
       if (!cardId) return false;
       const kind = Cards.TYPES[cardId].kind;
-      if (kind === "shield" && !you.isHolder) return false;
+      // Eliminated players only ever hold their per-round ghost item — one
+      // of the global-effect cards — and can fire it like anyone's card.
+      if (!you.alive) return kind === "speed" || kind === "blackout" || kind === "reverse";
+      // Shield is a personal bubble and can be activated by any living player;
+      // it does not require carrying the bomb.
       // Both hands are full holding a bomb (real or fake) — the holder
       // can't wield a thrown/fired weapon at the same time. Once it's been
       // thrown and is in flight, their hands are free again.
@@ -934,6 +1314,7 @@ const Render = (() => {
     lastEventSeq = 0;
     lastPayoutSeq = 0;
     payoutFloatStart = null;
+    payoutFloatSource = null;
   }
 
   return { draw, updateDom, resetDomCache };

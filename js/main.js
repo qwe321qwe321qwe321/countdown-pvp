@@ -18,26 +18,27 @@
   // is continuous, presses accumulate until take() is called.
   function makeCollector() {
     const state = {
-      mx: null, my: null, pass: false, draw: false, use: [], discard: [],
-      debug: false, equip: null, deadFire: false,
+      mx: null, my: null, pass: false, use: [], discard: [],
+      debug: false, equip: null, primaryFire: false, gunFireSlot: null,
     };
     return {
       setMouse(x, y) { state.mx = x; state.my = y; },
       pressPass() { state.pass = true; },
-      pressDraw() { state.draw = true; },
       pressUse(slot) { state.use.push(slot); },
       pressDiscard(slot) { state.discard.push(slot); },
       setDebug(v) { state.debug = v; },
       setEquip(slot) { state.equip = slot; },
-      setDeadFire(v) { state.deadFire = !!v; },
+      setPrimaryFire(v) { state.primaryFire = !!v; },
+      setGunFireSlot(slot) { state.gunFireSlot = slot == null ? null : slot; },
       peek() { return state; },
       take() {
         const out = {
-          mx: state.mx, my: state.my, pass: state.pass, draw: state.draw,
+          mx: state.mx, my: state.my, pass: state.pass,
           use: state.use.slice(), discard: state.discard.slice(), debug: state.debug,
-          equip: state.equip, deadFire: state.deadFire,
+          equip: state.equip, primaryFire: state.primaryFire,
+          gunFireSlot: state.gunFireSlot,
         };
-        state.pass = false; state.draw = false; state.use = []; state.discard = [];
+        state.pass = false; state.use = []; state.discard = [];
         return out;
       },
     };
@@ -113,10 +114,12 @@
       const dt = Math.min(dtMs, 100) / 1000;
       const dx = target.x - predOffset.x, dy = target.y - predOffset.y;
       const stepLen = Math.hypot(dx, dy);
-      const maxStep = CONFIG.BombArmMoveSpeed * dt;
-      predOffset = (stepLen <= maxStep || stepLen < 0.001)
-        ? target
-        : { x: predOffset.x + dx / stepLen * maxStep, y: predOffset.y + dy / stepLen * maxStep };
+      const maxStep = CONFIG.BombArmMoveSpeed * (me.armBuffed ? CONFIG.ReinforcedArmSpeedMult : 1) * dt;
+      if (!st.primaryFire) {
+        predOffset = (stepLen <= maxStep || stepLen < 0.001)
+          ? target
+          : { x: predOffset.x + dx / stepLen * maxStep, y: predOffset.y + dy / stepLen * maxStep };
+      }
       outBomb = Object.assign({}, snap.bomb, { x: seat.x + predOffset.x, y: seat.y + predOffset.y });
       predHolder = true;
     } else {
@@ -127,20 +130,21 @@
     // Aim: once I've armed a weapon locally, show its pose + sight line pointing
     // at the live mouse immediately, rather than waiting for the host to echo my
     // equip back; also keep an already-confirmed weapon/magnify tracking live.
-    const deadAiming = !!(you && you.deadWeapon && snap.phase === "playing");
-    if (deadAiming) {
+    const chargeAiming = !!(you && you.chargedWeapon && snap.phase === "playing" &&
+      armedSlot == null && !iAmHolder && !you.holdsFake);
+    if (chargeAiming) {
       const auth = (me.aimX != null) ? { x: me.aimX, y: me.aimY } : mouse;
       if (!predDeadAim ||
-          Math.hypot(predDeadAim.x - auth.x, predDeadAim.y - auth.y) > CONFIG.DeadWeaponAimSpeed) {
+          Math.hypot(predDeadAim.x - auth.x, predDeadAim.y - auth.y) > CONFIG.ChargedShotAimSpeed) {
         predDeadAim = auth;
       }
       // Keep predicting the slowed aim through the release frame while the
       // latest host snapshot still says the shot is charged/held.
-      if (st.deadFire || you.deadWeaponCharging) {
+      if (st.primaryFire || you.chargedWeaponCharging) {
         const dt = Math.min(dtMs, 100) / 1000;
         const dx = mouse.x - predDeadAim.x, dy = mouse.y - predDeadAim.y;
         const len = Math.hypot(dx, dy);
-        const maxStep = CONFIG.DeadWeaponAimSpeed * dt;
+        const maxStep = CONFIG.ChargedShotAimSpeed * dt;
         predDeadAim = (len <= maxStep || len < 0.001)
           ? mouse
           : { x: predDeadAim.x + dx / len * maxStep, y: predDeadAim.y + dy / len * maxStep };
@@ -155,7 +159,7 @@
     const armedNow = armedSlot != null && you && you.alive && snap.phase === "playing" && !iAmHolder;
     if (armedNow) {
       outMe = Object.assign({}, me, { equipped: true, aimX: mouse.x, aimY: mouse.y });
-    } else if (!deadAiming && (me.equipped || me.revealing)) {
+    } else if (!chargeAiming && (me.equipped || me.revealing)) {
       outMe = Object.assign({}, me, { aimX: mouse.x, aimY: mouse.y });
     }
 
@@ -171,7 +175,7 @@
     hand: $("hand"),
     aimHint: $("aimHint"),
     btnPass: $("btnPass"),
-    btnDraw: $("btnDraw"),
+    autoBuyStatus: $("autoBuyStatus"),
     eventLog: $("eventLog"),
     cardCodex: $("cardCodex"),
     codexTitle: $("codexTitle"),
@@ -199,28 +203,36 @@
 
   // While the primary button is held we capture the pointer, which means
   // browsers may dispatch movement as `pointermove` instead of `mousemove`.
-  // Keep feeding the live cursor into the collector so the ghost gun can
+  // Keep feeding the live cursor into the collector so the charged sling can
   // continue its deliberately slow authoritative tracking during charge.
   canvas.addEventListener("pointermove", e => {
     const p = canvasPoint(e);
     collector.setMouse(p.x, p.y);
   });
 
-  // Once eliminated, primary mouse becomes a held input rather than a click:
-  // charge the permanent -5 interference gun, then release to fire it.
+  // Primary mouse is contextual: free hands charge the universal sling shot,
+  // holding a bomb taunts, and an armed machine gun fires continuously.
   canvas.addEventListener("pointerdown", e => {
     const you = latestSnap && latestSnap.you;
-    if (e.button !== 0 || !you || !you.deadWeapon || latestSnap.phase !== "playing") return;
+    if (e.button !== 0 || !you || latestSnap.phase !== "playing") return;
     const p = canvasPoint(e);
     collector.setMouse(p.x, p.y);
-    collector.setDeadFire(true);
+    const cardId = armedSlot != null && you.hand[armedSlot];
+    if (cardId && Cards.TYPES[cardId].gunStyle === "auto") {
+      collector.setGunFireSlot(armedSlot);
+    } else if (armedSlot == null) {
+      collector.setPrimaryFire(true);
+    }
     if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
-  const releaseDeadFire = () => collector.setDeadFire(false);
-  canvas.addEventListener("pointerup", releaseDeadFire);
-  canvas.addEventListener("pointercancel", releaseDeadFire);
-  window.addEventListener("blur", releaseDeadFire);
+  const releasePrimary = () => {
+    collector.setPrimaryFire(false);
+    collector.setGunFireSlot(null);
+  };
+  canvas.addEventListener("pointerup", releasePrimary);
+  canvas.addEventListener("pointercancel", releasePrimary);
+  window.addEventListener("blur", releasePrimary);
 
   // Projectile cards need a deliberate aim: selecting one "arms" it, and each
   // canvas click fires one shot toward the click point (so a stray
@@ -231,6 +243,14 @@
   // card is discarded). Non-projectile cards (shield/curse/speed/magnify)
   // still use instantly.
   let armedSlot = null;
+  let armedSlotVersion = null;
+
+  function clearArmed() {
+    armedSlot = null;
+    armedSlotVersion = null;
+    collector.setEquip(null);
+    collector.setGunFireSlot(null);
+  }
 
   // If the currently armed slot already has an in-progress multi-shot gun
   // (at least one round fired), leaving it behind discards the remainder.
@@ -239,8 +259,7 @@
     if (armedSlot != null && you && you.gunPending && you.gunPending.slot === armedSlot) {
       collector.pressDiscard(armedSlot);
     }
-    armedSlot = null;
-    collector.setEquip(null);
+    clearArmed();
   }
 
   function activateCard(slot) {
@@ -257,6 +276,7 @@
       if (armedSlot === slot) { deactivateArmed(); return; }
       deactivateArmed(); // switching weapons forfeits whatever was mid-burst
       armedSlot = slot;
+      armedSlotVersion = you.handSlotVersions ? you.handSlotVersions[slot] : 0;
       collector.setEquip(armedSlot);
     } else {
       collector.pressUse(slot);
@@ -267,6 +287,9 @@
 
   canvas.addEventListener("click", e => {
     if (armedSlot == null) return;
+    const you = latestSnap && latestSnap.you;
+    const cardId = you && you.hand[armedSlot];
+    if (cardId && Cards.TYPES[cardId].gunStyle === "auto") return;
     const p = canvasPoint(e);
     collector.setMouse(p.x, p.y);
     collector.pressUse(armedSlot);
@@ -281,7 +304,6 @@
     if (e.code === "Escape") { cancelAim(); return; }
     if (e.repeat) return;
     if (e.code === "Space") { e.preventDefault(); collector.pressPass(); }
-    else if (e.code === "KeyR") collector.pressDraw();
     else if (e.code === "Digit1") activateCard(0);
     else if (e.code === "Digit2") activateCard(1);
     else if (e.code === "Digit3") activateCard(2);
@@ -290,7 +312,6 @@
   });
 
   $("btnPass").onclick = () => collector.pressPass();
-  $("btnDraw").onclick = () => collector.pressDraw();
   $("chkDebug").onchange = e => collector.setDebug(e.target.checked);
 
   // ---- Render loop (shared by host and client) ----
@@ -304,11 +325,14 @@
       // Drop the armed card if it left the hand (used elsewhere, discarded,
       // died, or the phase changed) so the UI never shows a stale aim state.
       const you = latestSnap.you;
-      if (!you || !you.deadWeapon || latestSnap.phase !== "playing") collector.setDeadFire(false);
+      if (!you || latestSnap.phase !== "playing") releasePrimary();
       const reallyHolding = you && ((you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring)) || you.holdsFake);
-      if (armedSlot != null && (!you || !you.hand[armedSlot] || reallyHolding || latestSnap.phase !== "playing")) {
-        armedSlot = null;
-        collector.setEquip(null);
+      const armedCardWasReplaced = armedSlot != null && you && you.handSlotVersions &&
+        you.handSlotVersions[armedSlot] !== armedSlotVersion;
+      if (armedSlot != null &&
+          (!you || !you.hand[armedSlot] || armedCardWasReplaced ||
+            reallyHolding || latestSnap.phase !== "playing")) {
+        clearArmed();
       }
       canvas.style.cursor = armedSlot != null ? "pointer" : "crosshair";
 

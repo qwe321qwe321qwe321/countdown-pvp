@@ -2,9 +2,10 @@
 
 // Host-authoritative simulation. This file is the single source of truth for
 // every rule in docs/prototype_plan.md: bomb timer, holder, passing order,
-// pass lock, projectile collision, coins, card draws, shield, curse, deaths.
+// pass lock, projectile collision, auto-purchases, shield, global effects, deaths.
 // It only ever advances through Sim.step(sim, inputsByPlayerId, dt), where an
-// input is plain data: { mx, my, pass, draw, use: [slotIndex] }.
+// input is plain data: { mx, my, pass, use: [slotIndex], primaryFire,
+// gunFireSlot }.
 // Clients never run this — they only send inputs and render snapshots.
 const Sim = (() => {
   const C = CONFIG;
@@ -59,6 +60,11 @@ const Sim = (() => {
 
   function getPlayer(sim, id) { return sim.players.find(p => p.id === id) || null; }
 
+  function rollDeadGlobalItem() {
+    const ids = C.DeadGlobalItemIds;
+    return ids[Math.floor(Math.random() * ids.length)];
+  }
+
   // Bomb world position = holder seat + arm-controlled offset. Before a holder
   // is chosen (reveal/countdown) the bomb sits at the table center.
   function bombWorldPos(sim) {
@@ -75,6 +81,25 @@ const Sim = (() => {
     if (!holder) return { x: CENTER.x, y: CENTER.y };
     const seat = seatPosition(holder.seat, sim.seatCount);
     return { x: seat.x + b.offset.x, y: seat.y + b.offset.y };
+  }
+
+  // Shield is a personal bubble around the carrier, not a ring glued to the
+  // bomb. It covers the complete arm reach and stops protecting once the bomb
+  // is thrown outside that bubble or is mid-flight.
+  function shieldCoversBomb(sim) {
+    const b = sim.bomb;
+    if (!b || b.shieldRemaining <= 0 || !b.holderId || b.transfer) return false;
+    const owner = getPlayer(sim, b.shieldOwnerId);
+    if (!owner) return false;
+    return dist(bombWorldPos(sim), seatPosition(owner.seat, sim.seatCount)) <=
+      C.BombArmReach + C.BombRadius;
+  }
+
+  function shieldBubble(sim) {
+    const b = sim.bomb;
+    if (!b || b.shieldRemaining <= 0 || !b.shieldOwnerId || b.transfer) return null;
+    const owner = getPlayer(sim, b.shieldOwnerId);
+    return owner ? seatPosition(owner.seat, sim.seatCount) : null;
   }
 
   // Same position rule for a fake bomb entity: lerp along its transfer while
@@ -115,13 +140,12 @@ const Sim = (() => {
     if (sim.events.length > 40) sim.events.shift();
   }
 
-  // Positioned visual-only effect (currently just "fakeboom": a fake bomb's
-  // harmless explosion). Renderers key off type + age; `data` carries extra
-  // presentation hints (e.g. midAir for the staged blast sequence).
+  // Positioned visual-only effects. Renderers key off type + age; `data`
+  // carries extra presentation hints and target player ids.
   function addEffect(sim, type, x, y, data) {
     sim.effectSeq++;
     sim.effects.push(Object.assign({ seq: sim.effectSeq, type, x, y, time: sim.time }, data || {}));
-    if (sim.effects.length > 12) sim.effects.shift();
+    if (sim.effects.length > 20) sim.effects.shift();
   }
 
   // ---- Match / bomb lifecycle ----------------------------------------------
@@ -170,6 +194,7 @@ const Sim = (() => {
       bombTimePool: bombTimePool.slice(),
       roundNumber: 0,
       roundCardPool: [],
+      seenRoundCardIds: [],
       players: roster.map((r, i) => ({
         id: r.id,
         name: r.name,
@@ -180,6 +205,8 @@ const Sim = (() => {
         alive: true,
         coins: C.StartingCoins,
         hand: freshHand(),  // fixed-size; card type ids or null for empty slots
+        handSlotVersions: new Array(C.MaxHandSize).fill(0),
+        autoBuyInputLocks: new Set(), // refilled slots require the old use/fire input to be released
         passLock: 0,
         passiveAcc: 0,
         holderAcc: 0,
@@ -189,10 +216,13 @@ const Sim = (() => {
         equippedSlot: null,      // hand slot the player is currently aiming (cosmetic, public)
         gunPending: null,        // multi-click gun card mid-use: { cardId, slot, shotsLeft }
         armBuffRemaining: 0,     // Reinforced Arm: free-target + 2x pass speed while > 0
-        deadWeaponCharge: 0,     // eliminated-player interference gun: held charge progress
+        deadWeaponCharge: 0,     // universal charged sling shot progress (alive or eliminated)
         deadWeaponCharging: false,
+        taunting: false,
         lastPayoutAmount: 0,     // most recent farmed-pot cash-in, for the private "+N" cue
         lastPayoutSeq: 0,        // bumped every cash-in so the client can detect a new one even if the amount repeats
+        lastPayoutSourceX: null, // bomb release point for the private fly-to-player animation
+        lastPayoutSourceY: null,
       })),
       bomb: null,
       // Fake Bomb decoys. Each entry is a full bomb entity — held in the
@@ -205,6 +235,7 @@ const Sim = (() => {
       nextFakeId: 1,
       projectiles: [],
       nextProjId: 1,
+      nextShotGroup: 1,
       events: [],
       eventSeq: 0,
       // Positioned, purely-visual one-shot effects (e.g. a fake bomb's
@@ -220,6 +251,9 @@ const Sim = (() => {
       explosionMidAir: false,   // detonated while flying between seats -> render the staged blast sequence
       winnerId: null,
       winningTeam: null,        // set instead of winnerId when teamCount > 1
+      reversePassing: false,
+      blackoutRemaining: 0,
+      blackoutElapsed: 0,
       time: 0,
     };
     spawnBomb(sim);
@@ -230,7 +264,24 @@ const Sim = (() => {
   // temporary state. Alive players keep coins and cards across bombs.
   function spawnBomb(sim) {
     sim.roundNumber++;
-    sim.roundCardPool = Cards.rollRoundPool(sim.roundCardPool);
+    // Reverse is too swingy in a two-player duel, so it is omitted from the
+    // round shop pool for 1v1 matches (it remains available in larger games).
+    sim.roundCardPool = Cards.rollRoundPool(sim.roundCardPool,
+      sim.players.length === 2 ? ["reverse"] : null, sim.seenRoundCardIds);
+    for (const id of sim.roundCardPool) {
+      if (!sim.seenRoundCardIds.includes(id)) sim.seenRoundCardIds.push(id);
+    }
+    // Opening loadout: Magnifying Glass from StartingHand plus this opening
+    // pool's attack slot. This keeps the free weapon aligned with the round
+    // instead of always handing everyone the -5s Gun.
+    if (sim.roundNumber === 1) {
+      const openingAttack = sim.roundCardPool[1];
+      for (const p of sim.players) {
+        if (!p.alive || !openingAttack) continue;
+        const slot = p.hand.indexOf(null);
+        if (slot >= 0) p.hand[slot] = openingAttack;
+      }
+    }
     const pool = sim.bombTimePool;
     const t = pool[Math.floor(Math.random() * pool.length)];
     // Pick the initial holder now and start it traveling there right away, so
@@ -249,6 +300,7 @@ const Sim = (() => {
       speedMult: 1,
       speedRemaining: 0,
       shieldRemaining: 0,
+      shieldOwnerId: null,
       curseActive: false,
       pot: 0,                     // farming income accrued while held; paid to whoever throws it
       transfer: target
@@ -263,6 +315,9 @@ const Sim = (() => {
     sim.explosionVictimId = null;
     sim.explosionMidAir = false;
     sim.playElapsed = 0;
+    sim.reversePassing = false;
+    sim.blackoutRemaining = 0;
+    sim.blackoutElapsed = 0;
     for (const p of sim.players) {
       p.passLock = 0;
       p.revealRemaining = 0;
@@ -273,6 +328,10 @@ const Sim = (() => {
       p.armBuffRemaining = 0;
       p.deadWeaponCharge = 0;
       p.deadWeaponCharging = false;
+      p.taunting = false;
+      // Eliminated players get a fresh ghost item each round, sitting right
+      // in hand slot 1 like any other card — usable via the normal card UI.
+      if (!p.alive) p.hand[0] = rollDeadGlobalItem();
     }
     sim.phase = "reveal";
     sim.phaseTimer = C.InitialTimeRevealDuration;
@@ -292,6 +351,8 @@ const Sim = (() => {
       p.alive = !p.disconnected;
       p.coins = C.StartingCoins;
       p.hand = freshHand();
+      p.handSlotVersions = new Array(C.MaxHandSize).fill(0);
+      p.autoBuyInputLocks.clear();
       p.passLock = 0;
       p.passiveAcc = 0;
       p.holderAcc = 0;
@@ -301,13 +362,17 @@ const Sim = (() => {
       p.armBuffRemaining = 0;
       p.deadWeaponCharge = 0;
       p.deadWeaponCharging = false;
+      p.taunting = false;
       p.lastPayoutAmount = 0;
       p.lastPayoutSeq = 0;
+      p.lastPayoutSourceX = null;
+      p.lastPayoutSourceY = null;
     }
     sim.winnerId = null;
     sim.winningTeam = null;
     sim.roundNumber = 0;
     sim.roundCardPool = [];
+    sim.seenRoundCardIds = [];
     // Back to a clean opening: reveal phase, bomb travelling in from center.
     // Works whether the rematch was fired at match-over or mid-round.
     sim.phase = "reveal";
@@ -316,8 +381,9 @@ const Sim = (() => {
   }
 
   function nextAliveFrom(sim, seat) {
+    const direction = sim.reversePassing ? -1 : 1;
     for (let k = 1; k <= sim.seatCount; k++) {
-      const wantSeat = (seat + k) % sim.seatCount;
+      const wantSeat = (seat + direction * k + sim.seatCount * 2) % sim.seatCount;
       const p = sim.players.find(pl => pl.seat === wantSeat);
       if (p && p.alive) return p;
     }
@@ -455,6 +521,8 @@ const Sim = (() => {
     player.alive = false;
     player.coins = 0;
     player.hand = new Array(C.MaxHandSize).fill(null);
+    player.handSlotVersions = new Array(C.MaxHandSize).fill(0);
+    player.autoBuyInputLocks.clear();
     player.revealRemaining = 0;
     player.gunPending = null;
     player.equippedSlot = null;
@@ -464,6 +532,14 @@ const Sim = (() => {
     // active play.
     player.deadWeaponCharge = 0;
     player.deadWeaponCharging = false;
+    // Elimination also hands over one ghost item, sitting right in hand
+    // slot 1 like any other card — no separate button needed to use it.
+    player.hand[0] = rollDeadGlobalItem();
+    player.taunting = false;
+    if (sim.bomb && sim.bomb.shieldOwnerId === player.id) {
+      sim.bomb.shieldRemaining = 0;
+      sim.bomb.shieldOwnerId = null;
+    }
     // A decoy in a dead player's hands vanishes with them; one they already
     // passed away is mid-flight and settles on arrival as usual.
     sim.fakeBombs = sim.fakeBombs.filter(f => f.transfer || f.holderId !== player.id);
@@ -503,6 +579,10 @@ const Sim = (() => {
     }
     sim.bomb = null;
     sim.projectiles = [];
+    // A lethal blast immediately lights the whole table again so its staged
+    // explosion and elimination are visible to every player.
+    sim.blackoutRemaining = 0;
+    sim.blackoutElapsed = 0;
     sim.phase = "exploding";
     sim.phaseTimer = C.ExplosionTransitionDuration;
   }
@@ -549,21 +629,26 @@ const Sim = (() => {
 
   // ---- Cards ---------------------------------------------------------------
 
-  function tryDraw(sim, p) {
+  // Coins are spent automatically as soon as an alive player can afford a
+  // card and has an empty hand slot. A large payout may buy several cards in
+  // one tick; the host still rolls every result authoritatively.
+  function autoBuyCards(sim, p) {
     if (!p.alive) return;
-    if (p.coins < C.CardDrawCost) return;
-    const slot = p.hand.indexOf(null);
-    if (slot === -1) return; // hand full: no draw, no charge
-    // While bombs in play (real + fakes) are at the player-count cap, Fake
-    // Bomb leaves the draw pool entirely — the card would be unusable dead
-    // weight, so it can't even be drawn until a slot frees up.
-    const bombsInPlay = (sim.bomb ? 1 : 0) + sim.fakeBombs.length;
-    const exclude = bombsInPlay >= sim.players.length ? ["fakebomb"] : null;
-    const cardId = Cards.rollCard(exclude, sim.roundCardPool);
-    if (!cardId) return;
-    p.coins -= C.CardDrawCost;
-    p.hand[slot] = cardId;                         // host decides which card
-    addEvent(sim, `${p.name} drew a card`);
+    while (p.coins >= C.CardDrawCost) {
+      const slot = p.hand.indexOf(null);
+      if (slot === -1) return;
+      // While bombs in play (real + fakes) are at the player-count cap, Fake
+      // Bomb leaves the shop pool entirely.
+      const bombsInPlay = (sim.bomb ? 1 : 0) + sim.fakeBombs.length;
+      const exclude = bombsInPlay >= sim.players.length ? ["fakebomb"] : null;
+      const cardId = Cards.rollCard(exclude, sim.roundCardPool);
+      if (!cardId) return;
+      p.coins -= C.CardDrawCost;
+      p.hand[slot] = cardId;
+      p.handSlotVersions[slot]++;
+      p.autoBuyInputLocks.add(slot);
+      addEvent(sim, `${p.name} auto-bought ${Cards.TYPES[cardId].name}`);
+    }
   }
 
   // Drop a card from the hand without triggering its effect (e.g. to make
@@ -596,20 +681,17 @@ const Sim = (() => {
         break;
 
       case "speed": {
-        // Override rule: the new modifier fully replaces the old one.
-        b.speedMult = def.mult;
-        b.speedRemaining = def.duration;
+        activateGlobalEffect(sim, cardId, p);
         consume();
-        const msg = def.mult === 0 ? `TIME FROZEN (${p.name})` : `SPEED x${def.mult} (${p.name})`;
-        addEvent(sim, msg, ...posArgs(bombWorldPos(sim)));
         break;
       }
 
       case "shield":
         // Only the current bomb holder may shield, and not while it's
         // already in flight mid-pass; otherwise the card stays in hand.
-        if (b.holderId !== p.id || b.transfer) return;
+        if (b.transfer) return;
         b.shieldRemaining = C.ShieldDuration;
+        b.shieldOwnerId = p.id;
         consume();
         addEvent(sim, `SHIELD ACTIVATED (${p.name})`, ...posArgs(bombWorldPos(sim)));
         break;
@@ -628,25 +710,10 @@ const Sim = (() => {
         // though ownership hasn't formally changed yet.
         if (holdsAnyBomb(sim, p)) return;
         // Real 2D projectiles (never hitscan), fired from the player's hand
-        // toward their current mouse aim. +Time Repair Kits are a single
-        // throw, consumed immediately. -Time Gun cards hold C.GunBurstCount
-        // separate shots: each press here fires exactly one (re-aimed at the
-        // current mouse position), and the card is only consumed once every
-        // shot is spent — or earlier, if the player cancels and the
-        // unfired rounds are discarded (see discardCard).
+        // toward their current mouse aim. Repair kits are single throws;
+        // guns delegate to their own magazine/spread/cooldown behavior.
         if (def.amount < 0) {
-          let pending = p.gunPending;
-          if (!pending || pending.cardId !== cardId || pending.slot !== slot) {
-            pending = { cardId, slot, shotsLeft: C.GunBurstCount };
-            p.gunPending = pending;
-          }
-          fireProjectile(sim, p, def.amount);
-          pending.shotsLeft--;
-          addEvent(sim, `${p.name} fired ${def.name}`);
-          if (pending.shotsLeft <= 0) {
-            p.gunPending = null;
-            consume();
-          }
+          fireGunRound(sim, p, slot);
         } else {
           fireProjectile(sim, p, def.amount);
           consume();
@@ -668,7 +735,7 @@ const Sim = (() => {
       case "reinforced":
         p.armBuffRemaining = C.ReinforcedArmDuration;
         consume();
-        addEvent(sim, `${p.name} equipped a Reinforced Arm`);
+        addEvent(sim, `${p.name} equipped a Reinforced Arm — aim at any player and press SPACE!`);
         break;
 
       case "fakebomb": {
@@ -702,7 +769,68 @@ const Sim = (() => {
         addEvent(sim, `${p.name} pulled out a bomb...`);
         break;
       }
+
+      case "blackout":
+      case "reverse":
+        activateGlobalEffect(sim, cardId, p);
+        consume();
+        break;
     }
+  }
+
+  function activateGlobalEffect(sim, cardId, p) {
+    const def = Cards.TYPES[cardId];
+    const who = p ? ` (${p.name})` : "";
+    if (def.kind === "speed") {
+      sim.bomb.speedMult = def.mult;
+      sim.bomb.speedRemaining = def.duration;
+      const msg = def.mult === 0 ? `TIME FROZEN${who}` : `SPEED x${def.mult}${who}`;
+      addEvent(sim, msg, ...posArgs(bombWorldPos(sim)));
+    } else if (def.kind === "blackout") {
+      sim.blackoutRemaining = C.BlackoutDuration;
+      sim.blackoutElapsed = 0;
+      addEvent(sim, `LIGHTS OUT${who}`);
+    } else if (def.kind === "reverse") {
+      sim.reversePassing = !sim.reversePassing;
+      addEvent(sim, `${sim.reversePassing ? "PASSING REVERSED" : "PASSING RESTORED"}${who}`);
+    }
+  }
+
+  function gunCooldown(def) {
+    if (def.gunStyle === "semi") return C.Gun5Cooldown;
+    if (def.gunStyle === "shotgun") return C.Gun3Cooldown;
+    return C.Gun1FireInterval;
+  }
+
+  function fireGunRound(sim, p, slot) {
+    const cardId = p.hand[slot];
+    const def = cardId && Cards.TYPES[cardId];
+    if (!def || def.kind !== "projectile" || def.amount >= 0 || holdsAnyBomb(sim, p)) return false;
+
+    let pending = p.gunPending;
+    if (!pending || pending.cardId !== cardId || pending.slot !== slot) {
+      pending = { cardId, slot, shotsLeft: def.magazine, nextShotAt: 0 };
+      p.gunPending = pending;
+    }
+    if (sim.time + 1e-9 < pending.nextShotAt) return false;
+
+    if (def.gunStyle === "shotgun") {
+      const spread = C.Gun3SpreadDegrees * Math.PI / 180;
+      const groupId = sim.nextShotGroup++;
+      for (const offset of [-spread, 0, spread]) {
+        fireProjectile(sim, p, def.amount, C.ProjectileSpeed, offset, groupId);
+      }
+    } else {
+      fireProjectile(sim, p, def.amount, C.ProjectileSpeed);
+    }
+    pending.shotsLeft--;
+    pending.nextShotAt = sim.time + gunCooldown(def);
+    addEvent(sim, `${p.name} fired ${def.name}`);
+    if (pending.shotsLeft <= 0) {
+      p.gunPending = null;
+      p.hand[slot] = null;
+    }
+    return true;
   }
 
   function posArgs(pos) { return pos ? [pos.x, pos.y] : []; }
@@ -710,19 +838,27 @@ const Sim = (() => {
   // Spawns one real 2D projectile from the player's seat toward their current
   // aim. Reads p.aim fresh each call so successive shots in a burst can be
   // re-aimed between shots.
-  function fireProjectile(sim, p, amount) {
+  function fireProjectile(sim, p, amount, speed, angleOffset, shotGroup) {
     const seat = seatPosition(p.seat, sim.seatCount);
     let dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
     const len = Math.hypot(dx, dy);
     if (len < 0.001) { dx = 0; dy = -1; } else { dx /= len; dy /= len; }
+    if (angleOffset) {
+      const cos = Math.cos(angleOffset), sin = Math.sin(angleOffset);
+      const rx = dx * cos - dy * sin;
+      dy = dx * sin + dy * cos;
+      dx = rx;
+    }
+    const projectileSpeed = speed || C.ProjectileSpeed;
     sim.projectiles.push({
       id: sim.nextProjId++,
       ownerId: p.id,
       amount,
       x: seat.x + dx * C.MuzzleOffset,
       y: seat.y + dy * C.MuzzleOffset,
-      vx: dx * C.ProjectileSpeed,
-      vy: dy * C.ProjectileSpeed,
+      vx: dx * projectileSpeed,
+      vy: dy * projectileSpeed,
+      shotGroup: shotGroup || null,
     });
   }
 
@@ -754,6 +890,7 @@ const Sim = (() => {
     const b = sim.bomb;
     const bombPos = bombWorldPos(sim);
     const survivors = [];
+    const groupedHits = new Map();
 
     for (const pr of sim.projectiles) {
       pr.x += pr.vx * dt;
@@ -762,9 +899,19 @@ const Sim = (() => {
       // Walls block (projectile just vanishes).
       if (pr.x < 0 || pr.x > C.WorldWidth || pr.y < 0 || pr.y > C.WorldHeight) continue;
 
+      // The shield is a real circular projectile collider around the holder.
+      // Shots fired by the shield owner are allowed out; incoming shots vanish
+      // the moment they touch the bubble, even if the bomb is offset elsewhere.
+      const bubble = shieldBubble(sim);
+      const shieldOwner = sim.bomb && sim.bomb.shieldOwnerId;
+      if (bubble && pr.ownerId !== shieldOwner && dist(pr, bubble) <= C.BombArmReach) {
+        addEvent(sim, "SHIELD BLOCKED IT", pr.x, pr.y);
+        continue;
+      }
+
       // Bomb collider: the only place effects apply.
       if (b && b.holderId && dist(pr, bombPos) <= C.BombRadius + C.ProjectileRadius) {
-        if (b.shieldRemaining > 0) {
+        if (shieldCoversBomb(sim)) {
           // Shield: projectile still vanishes, but no time effect.
           addEvent(sim, "SHIELD BLOCKED IT", bombPos.x, bombPos.y);
         } else if (pr.isClaw) {
@@ -789,19 +936,37 @@ const Sim = (() => {
             };
             addEvent(sim, `${owner.name} grappled the bomb!`, bombPos.x, bombPos.y);
           }
-        } else if (b.speedMult === 0 && b.speedRemaining > 0) {
+        } else {
+          if (pr.amount < 0) {
+            const shooter = getPlayer(sim, pr.ownerId);
+            const stolen = Math.min(C.BombBulletCoinLoss, b.pot);
+            if (shooter && stolen > 0) {
+              b.pot -= stolen;
+              shooter.coins += stolen;
+              addEffect(sim, "coinstolen", bombPos.x, bombPos.y, {
+                receiverId: shooter.id,
+                amount: stolen,
+              });
+            }
+          }
+          if (b.speedMult === 0 && b.speedRemaining > 0) {
           // Frozen (Freeze Stopwatch): the bomb's timer is invincible while
           // stopped — time hits still vanish but never touch it. (A grapple is
           // handled above and is deliberately exempt: it only moves the bomb.)
-          addEvent(sim, "FROZEN — NO EFFECT", bombPos.x, bombPos.y);
-        } else if (pr.amount < 0) {
+            addEvent(sim, "FROZEN — NO EFFECT", bombPos.x, bombPos.y);
+          } else if (pr.amount < 0) {
           // No floor: a gun hit can bring the bomb straight to 0 and detonate it.
           b.remaining += pr.amount;
-          addEvent(sim, `${pr.amount} SEC`, bombPos.x, bombPos.y);
-        } else {
+          if (pr.shotGroup) {
+            const hit = groupedHits.get(pr.shotGroup) || { amount: 0, x: bombPos.x, y: bombPos.y };
+            hit.amount += pr.amount;
+            groupedHits.set(pr.shotGroup, hit);
+          } else addEvent(sim, `${pr.amount} SEC`, bombPos.x, bombPos.y);
+          } else {
           // No upper limit on bomb time.
           b.remaining += pr.amount;
           addEvent(sim, `+${pr.amount} SEC`, bombPos.x, bombPos.y);
+          }
         }
         continue;
       }
@@ -844,6 +1009,9 @@ const Sim = (() => {
       // longer shield the bomb by standing their own body in the line of fire.
       survivors.push(pr);
     }
+    for (const hit of groupedHits.values()) {
+      if (hit.amount) addEvent(sim, `${hit.amount} SEC`, hit.x, hit.y);
+    }
     sim.projectiles = survivors;
   }
 
@@ -860,15 +1028,17 @@ const Sim = (() => {
       if (!inp || inp.mx == null) continue;
       // Keep the release frame constrained too: a fully charged player
       // cannot bypass the slow aim by flicking the cursor as they let go.
-      const slowDeadAim = !p.alive && !p.disconnected && sim.phase === "playing" &&
-        (!!inp.deadFire || p.deadWeaponCharging);
-      if (!slowDeadAim) {
+      const primaryHeld = !!(inp.primaryFire || inp.deadFire);
+      const chargingAim = !p.disconnected && sim.phase === "playing" &&
+        (primaryHeld || p.deadWeaponCharging) &&
+        (!p.alive || (!holdsAnyBomb(sim, p) && inp.equip == null));
+      if (!chargingAim) {
         p.aim = { x: inp.mx, y: inp.my };
         continue;
       }
       const dx = inp.mx - p.aim.x, dy = inp.my - p.aim.y;
       const len = Math.hypot(dx, dy);
-      const maxStep = C.DeadWeaponAimSpeed * dt;
+      const maxStep = C.ChargedShotAimSpeed * dt;
       if (len <= maxStep || len < 0.001) {
         p.aim = { x: inp.mx, y: inp.my };
       } else {
@@ -879,12 +1049,12 @@ const Sim = (() => {
       }
     }
 
-    stepDeadWeapons(sim, inputs, dt);
+    stepChargedWeapons(sim, inputs, dt);
 
     switch (sim.phase) {
       case "reveal":
         sim.phaseTimer -= dt;
-        allowDraws(sim, inputs);
+        maintainHands(sim, inputs);
         advanceBombTransfer(sim, dt);
         if (sim.phaseTimer <= 0) {
           sim.phase = "countdown";
@@ -894,7 +1064,7 @@ const Sim = (() => {
 
       case "countdown":
         sim.phaseTimer -= dt;
-        allowDraws(sim, inputs);
+        maintainHands(sim, inputs);
         advanceBombTransfer(sim, dt);
         if (sim.phaseTimer <= 0) {
           // Countdown over: timer goes hidden, gameplay starts. The initial
@@ -931,47 +1101,58 @@ const Sim = (() => {
     }
   }
 
-  // Eliminated players retain one permanent disruption tool: hold primary
-  // fire for a full charge, then release to launch a normal -5 projectile.
-  // Releasing early loses the charge; a full charge stays primed while held.
-  // After releasing, they can immediately begin charging the next shot.
+  // Everyone can use the charged sling shot while their hands are free.
+  // Eliminated players retain it permanently; living players temporarily put
+  // it away while holding a bomb, revealing, or wielding a card weapon.
+  // Releasing before the one-second minimum loses the charge. From one to two
+  // seconds, projectile speed scales linearly from half to full speed; a full
+  // charge stays primed while held. After releasing, charging can begin again.
   // Because fireProjectile and collision are shared with card guns, shields,
   // frozen bombs, fake bombs and walls all react through the same rules.
-  function stepDeadWeapons(sim, inputs, dt) {
+  function stepChargedWeapons(sim, inputs, dt) {
     for (const p of sim.players) {
-      if (p.alive || p.disconnected) continue;
+      if (p.disconnected) continue;
 
       const inp = inputs[p.id] || {};
       const canUse = sim.phase === "playing" && !!sim.bomb;
-      const triggerHeld = canUse && !!inp.deadFire;
+      const handsFree = !p.alive ||
+        (!holdsAnyBomb(sim, p) && inp.equip == null && p.revealRemaining <= 0);
+      const triggerHeld = canUse && handsFree && !!(inp.primaryFire || inp.deadFire);
       const wasCharging = p.deadWeaponCharging;
 
       if (triggerHeld) {
         p.deadWeaponCharging = true;
-        p.deadWeaponCharge = Math.min(C.DeadWeaponChargeTime, p.deadWeaponCharge + dt);
+        p.deadWeaponCharge = Math.min(C.ChargedShotChargeTime, p.deadWeaponCharge + dt);
         continue;
       }
 
       p.deadWeaponCharging = false;
-      const releasedAtFullCharge = canUse && wasCharging &&
-        p.deadWeaponCharge + 1e-9 >= C.DeadWeaponChargeTime;
-      if (releasedAtFullCharge) {
+      const releasedAtMinimumCharge = canUse && handsFree && wasCharging &&
+        p.deadWeaponCharge + 1e-9 >= C.ChargedShotMinimumChargeTime;
+      if (releasedAtMinimumCharge) {
+        const chargeRange = C.ChargedShotChargeTime - C.ChargedShotMinimumChargeTime;
+        const speedProgress = chargeRange > 0
+          ? Math.max(0, Math.min(1,
+            (p.deadWeaponCharge - C.ChargedShotMinimumChargeTime) / chargeRange))
+          : 1;
+        const speedMultiplier = C.ChargedProjectileMinSpeedMultiplier +
+          (1 - C.ChargedProjectileMinSpeedMultiplier) * speedProgress;
+        const projectileSpeed = C.ChargedProjectileSpeed * speedMultiplier;
         p.deadWeaponCharge = 0;
-        fireProjectile(sim, p, C.DeadWeaponAmount);
-        addEvent(sim, `${p.name} fired a ghost shot`);
+        fireProjectile(sim, p, C.ChargedShotAmount, projectileSpeed);
+        addEvent(sim, `${p.name} launched a charged shot`);
       } else {
         p.deadWeaponCharge = 0;
       }
     }
   }
 
-  // Card draws are allowed at any time while alive (even between countdowns).
-  function allowDraws(sim, inputs) {
+  // Auto-purchase and discarding stay available between active-play phases.
+  function maintainHands(sim, inputs) {
     for (const p of sim.players) {
       const inp = inputs[p.id];
-      if (!inp) continue;
-      if (inp.draw) tryDraw(sim, p);
-      if (inp.discard && inp.discard.length) {
+      autoBuyCards(sim, p);
+      if (inp && inp.discard && inp.discard.length) {
         const slots = [...new Set(inp.discard)].sort((a, z) => z - a);
         for (const slot of slots) discardCard(sim, p, slot);
       }
@@ -991,6 +1172,10 @@ const Sim = (() => {
       if (b.speedRemaining <= 0) { b.speedMult = 1; b.speedRemaining = 0; }
     }
     if (b.shieldRemaining > 0) b.shieldRemaining = Math.max(0, b.shieldRemaining - dt);
+    if (sim.blackoutRemaining > 0) {
+      sim.blackoutRemaining = Math.max(0, sim.blackoutRemaining - dt);
+      sim.blackoutElapsed += dt;
+    }
     b.remaining -= dt * b.speedMult;
 
     // Advance an in-flight pass. The bomb keeps counting down while it
@@ -1002,8 +1187,31 @@ const Sim = (() => {
     const coinScale = coinIntervalScale(sim);
 
     for (const p of sim.players) {
-      if (!p.alive) continue;
       const inp = inputs[p.id] || {};
+
+      // A held/click input belongs to the card that occupied its slot when
+      // the action began. If auto-buy refilled that slot, require one neutral
+      // tick before the replacement can react; this prevents a held machine
+      // gun (or a stale use press) from spilling directly into the new card.
+      const requestedUseSlots = new Set(
+        Array.isArray(inp.use) ? inp.use.filter(Number.isInteger) : []);
+      const requestedGunSlot = Number.isInteger(inp.gunFireSlot) ? inp.gunFireSlot : null;
+      for (const slot of p.autoBuyInputLocks) {
+        if (!requestedUseSlots.has(slot) && requestedGunSlot !== slot) {
+          p.autoBuyInputLocks.delete(slot);
+        }
+      }
+
+      // Eliminated players can't hold/pass/aim/auto-buy, but they can still
+      // fire their round's ghost item straight out of hand slot 1 — the same
+      // useCard() path any living player's card goes through.
+      if (!p.alive) {
+        if (inp.use && inp.use.length) {
+          const slots = [...new Set(inp.use)].sort((a, z) => z - a);
+          for (const slot of slots) useCard(sim, p, slot);
+        }
+        continue;
+      }
 
       // Cosmetic only: which hand slot (if any) this player is currently
       // aiming, so everyone can see they're wielding a thrown/fired weapon.
@@ -1018,6 +1226,7 @@ const Sim = (() => {
       // paid out on release — the bluff costs the decoy nothing real.
       const heldBomb = (p === holder && !b.transfer) ? b : fakeHeldBy(sim, p.id);
       const holding = !!heldBomb;
+      p.taunting = holding && !!(inp.primaryFire || inp.deadFire);
       const stalling = holding && p.holdElapsed >= C.BombHolderCoinDuration;
       if (holding) {
         // Farming the bomb replaces passive income entirely, not stacks on
@@ -1026,7 +1235,7 @@ const Sim = (() => {
         if (stalling) {
           p.holderAcc = 0;
         } else {
-          p.holderAcc += dt;
+          p.holderAcc += dt * (p.taunting ? C.TauntFarmMultiplier : 1);
           // Flat rate, deliberately not scaled by coinScale — farming speed
           // is the same 2 coins/s no matter how many players are seated.
           while (p.holderAcc >= C.BombHolderCoinInterval && heldBomb.pot < C.BombHolderPotCap) {
@@ -1058,12 +1267,23 @@ const Sim = (() => {
         controlHeldBomb(sim, p, heldFake, inp, dt);
       }
 
-      if (inp.draw) tryDraw(sim, p);
-
       if (inp.use && inp.use.length) {
         // Descending slot order so earlier splices don't shift later indices.
-        const slots = [...new Set(inp.use)].sort((a, z) => z - a);
+        const slots = [...requestedUseSlots]
+          .filter(slot => !p.autoBuyInputLocks.has(slot))
+          .sort((a, z) => z - a);
         for (const slot of slots) useCard(sim, p, slot);
+      }
+
+      // The -1s machine gun consumes its magazine while primary fire remains
+      // held. The per-player pending timestamp enforces its fire interval.
+      if (typeof inp.gunFireSlot === "number") {
+        const cardId = p.hand[inp.gunFireSlot];
+        const def = cardId && Cards.TYPES[cardId];
+        if (!p.autoBuyInputLocks.has(inp.gunFireSlot) &&
+            def && def.gunStyle === "auto") {
+          fireGunRound(sim, p, inp.gunFireSlot);
+        }
       }
 
       if (inp.discard && inp.discard.length) {
@@ -1071,6 +1291,8 @@ const Sim = (() => {
         const slots = [...new Set(inp.discard)].sort((a, z) => z - a);
         for (const slot of slots) discardCard(sim, p, slot);
       }
+
+      autoBuyCards(sim, p);
     }
 
     stepFakeBombs(sim, dt);
@@ -1086,6 +1308,9 @@ const Sim = (() => {
   // The client only sends a mouse position; the host computes and clamps the
   // actual offset and moves it at a limited speed — the arm never teleports.
   function controlHeldBomb(sim, p, bombLike, inp, dt) {
+    // A taunt intentionally locks both arms and disables throwing. The bomb
+    // remains at its last authoritative offset until primary fire is released.
+    if (p.taunting) return;
     const seat = seatPosition(p.seat, sim.seatCount);
     const dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
     const len = Math.hypot(dx, dy);
@@ -1096,7 +1321,9 @@ const Sim = (() => {
     }
     const ox = target.x - bombLike.offset.x, oy = target.y - bombLike.offset.y;
     const step = Math.hypot(ox, oy);
-    const maxStep = C.BombArmMoveSpeed * dt;
+    const armSpeed = C.BombArmMoveSpeed *
+      (p.armBuffRemaining > 0 ? C.ReinforcedArmSpeedMult : 1);
+    const maxStep = armSpeed * dt;
     bombLike.offset = (step <= maxStep || step < 0.001)
       ? target
       : { x: bombLike.offset.x + (ox / step) * maxStep, y: bombLike.offset.y + (oy / step) * maxStep };
@@ -1129,6 +1356,8 @@ const Sim = (() => {
         if (bombLike === sim.bomb && bombLike.pot > 0) {
           p.coins += bombLike.pot;
           p.lastPayoutAmount = bombLike.pot;
+          p.lastPayoutSourceX = fromPos.x;
+          p.lastPayoutSourceY = fromPos.y;
           p.lastPayoutSeq += 1;
         }
         bombLike.pot = 0;
@@ -1140,6 +1369,30 @@ const Sim = (() => {
   // Per-tick fake bomb upkeep: each decoy runs its own hidden countdown (a
   // harmless staged pop at 0) and settles transfer arrivals with the same
   // hot-potato bounce rule as the real bomb.
+  function popFakeBomb(sim, f, pos, holder) {
+    let nearest = null, nearestDistance = Infinity;
+    for (const p of sim.players) {
+      if (!p.alive) continue;
+      const d = dist(pos, seatPosition(p.seat, sim.seatCount));
+      if (d < nearestDistance) {
+        nearest = p;
+        nearestDistance = d;
+      }
+    }
+    if (nearest) nearest.coins += C.FakeBombNearestReward;
+    addEffect(sim, "fakeboom", pos.x, pos.y, {
+      midAir: !!f.transfer,
+      rewardPlayerId: nearest ? nearest.id : null,
+      reward: C.FakeBombNearestReward,
+    });
+    const reveal = holder
+      ? `POP! ${holder.name}'s bomb was FAKE`
+      : "POP! That bomb was FAKE";
+    addEvent(sim, nearest
+      ? `${reveal} — ${nearest.name} got $${C.FakeBombNearestReward}`
+      : reveal, pos.x, pos.y);
+  }
+
   function stepFakeBombs(sim, dt) {
     const survivors = [];
     for (const f of sim.fakeBombs) {
@@ -1148,11 +1401,7 @@ const Sim = (() => {
       if (f.remaining <= 0) {
         const pos = fakeWorldPos(sim, f);
         const holder = !f.transfer ? getPlayer(sim, f.holderId) : null;
-        // Mid-air pops get the same staged blast presentation as a real
-        // mid-air explosion; in someone's hands it bursts instantly like a
-        // real in-hand one. Either way: zero damage, bluff revealed.
-        addEffect(sim, "fakeboom", pos.x, pos.y, { midAir: !!f.transfer });
-        addEvent(sim, holder ? `BOOM! ...${holder.name}'s bomb was a FAKE` : "BOOM! ...that bomb was a FAKE", pos.x, pos.y);
+        popFakeBomb(sim, f, pos, holder);
         continue;
       }
       if (f.transfer) {
@@ -1183,8 +1432,7 @@ const Sim = (() => {
               addEvent(sim, `${receiver.name} was already holding a bomb — passed one on!`);
             } else {
               f.holderId = null;
-              addEffect(sim, "fakeboom", arrivedAt.x, arrivedAt.y, { midAir: true });
-              addEvent(sim, "BOOM! ...that bomb was a FAKE", arrivedAt.x, arrivedAt.y);
+              popFakeBomb(sim, f, arrivedAt, null);
               continue;
             }
           } else {
@@ -1229,6 +1477,7 @@ const Sim = (() => {
     const b = sim.bomb;
     const bombPos = bombWorldPos(sim);
     const viewer = getPlayer(sim, viewerId);
+    const viewerHandsFull = viewer ? holdsAnyBomb(sim, viewer) : false;
 
     const snap = {
       phase: sim.phase,
@@ -1238,6 +1487,9 @@ const Sim = (() => {
       teamCount: sim.teamCount,
       roundNumber: sim.roundNumber,
       roundCardPool: sim.roundCardPool.slice(),
+      reversePassing: sim.reversePassing,
+      blackoutRemaining: sim.blackoutRemaining,
+      blackoutElapsed: sim.blackoutElapsed,
       winnerId: sim.winnerId,
       winningTeam: sim.winningTeam,
       winnerName: sim.teamCount > 1
@@ -1259,6 +1511,7 @@ const Sim = (() => {
         holderId: b.holderId,
         initialTime: b.initialTime,        // public: players know the starting time
         shield: b.shieldRemaining > 0,     // announced publicly, so visible
+        shieldOwnerId: b.shieldOwnerId,
         curse: b.curseActive,              // announced publicly, so visible
         speedMult: b.speedMult,            // Speed Up/Down are announced publicly too
         transferring: !!b.transfer,        // in flight between seats: render it mid-pass
@@ -1309,23 +1562,27 @@ const Sim = (() => {
         const seat = seatPosition(p.seat, sim.seatCount);
         const equipped = p.equippedSlot != null;
         const revealing = p.revealRemaining > 0;
-        const deadWeapon = !p.alive && !p.disconnected;
         // Real or fake — a bomb in this player's charge (holderId-based, so
         // it holds through a pass) lights the same income cue, so the coin
         // trickle can't be used to tell a decoy from the real bomb.
         const isHolderNow = !!(b && b.holderId === p.id) || sim.fakeBombs.some(f => f.holderId === p.id);
+        const handsFullNow = !!(b && b.holderId === p.id && !b.transfer) ||
+          !!fakeHeldBy(sim, p.id);
+        const chargedWeapon = !p.disconnected &&
+          (!p.alive || (!handsFullNow && !equipped && !revealing));
         return {
           id: p.id, name: p.name, seat: p.seat, team: p.team, x: seat.x, y: seat.y, alive: p.alive,
           equipped,                          // wielding a throwable/gun card — visible to everyone
-          deadWeapon,                        // permanent interference gun after elimination
-          deadWeaponCharging: deadWeapon && p.deadWeaponCharging,
-          deadWeaponCharge: deadWeapon
-            ? Math.min(1, p.deadWeaponCharge / C.DeadWeaponChargeTime) : 0,
+          deadWeapon: !p.alive && !p.disconnected, // compatibility flag for the ghost presentation
+          chargedWeapon,
+          deadWeaponCharging: chargedWeapon && p.deadWeaponCharging,
+          deadWeaponCharge: chargedWeapon
+            ? Math.min(1, p.deadWeaponCharge / C.ChargedShotChargeTime) : 0,
           // Aim direction is public whenever a weapon or the magnifying glass
           // box-cast is out — everyone can see *where* it's pointed, never
           // the private reading it gives its owner.
-          aimX: (equipped || revealing || deadWeapon) ? p.aim.x : null,
-          aimY: (equipped || revealing || deadWeapon) ? p.aim.y : null,
+          aimX: (equipped || revealing || chargedWeapon) ? p.aim.x : null,
+          aimY: (equipped || revealing || chargedWeapon) ? p.aim.y : null,
           revealing,                         // using a Magnifying Glass right now — visible to everyone (not the reading itself)
           // Currently inside the holder-bonus income window — visible to
           // everyone so the extra coin trickle can be shown as a particle cue.
@@ -1339,6 +1596,7 @@ const Sim = (() => {
           cardCount: p.hand.filter(c => c != null).length,
           // Reinforced Arm: public "iron arm" cue while the buff is active.
           armBuffed: p.armBuffRemaining > 0,
+          taunting: p.taunting,
         };
       }),
       you: viewer ? {
@@ -1346,6 +1604,7 @@ const Sim = (() => {
         alive: viewer.alive,
         coins: viewer.coins,
         hand: viewer.hand.slice(),
+        handSlotVersions: viewer.handSlotVersions.slice(),
         isHolder: !!(b && b.holderId === viewerId),
         // Fake-bomb mirror of isHolder, split into "in my hands right now"
         // and "my throw is still in flight" so the local UI (pass button,
@@ -1353,35 +1612,48 @@ const Sim = (() => {
         holdsFake: !!fakeHeldBy(sim, viewerId),
         fakePassing: sim.fakeBombs.some(f => f.holderId === viewerId && f.transfer),
         deadWeapon: !viewer.alive && !viewer.disconnected,
+        chargedWeapon: !viewer.disconnected &&
+          (!viewer.alive || (!viewerHandsFull && viewer.equippedSlot == null &&
+            viewer.revealRemaining <= 0)),
         deadWeaponCharging: !viewer.alive && viewer.deadWeaponCharging,
-        deadWeaponCharge: !viewer.alive
-          ? Math.min(1, viewer.deadWeaponCharge / C.DeadWeaponChargeTime) : 0,
+        chargedWeaponCharging: viewer.deadWeaponCharging,
+        deadWeaponCharge: Math.min(1, viewer.deadWeaponCharge / C.ChargedShotChargeTime),
         // Present once at least one shot of a multi-click gun has already
         // been fired: canceling now must discard the unfired rounds rather
         // than leaving the card untouched.
-        gunPending: viewer.gunPending ? { slot: viewer.gunPending.slot, shotsLeft: viewer.gunPending.shotsLeft } : null,
+        gunPending: viewer.gunPending ? {
+          slot: viewer.gunPending.slot,
+          shotsLeft: viewer.gunPending.shotsLeft,
+          cooldown: Math.max(0, viewer.gunPending.nextShotAt - sim.time),
+        } : null,
         passLock: viewer.passLock,
-        canPass: !!(sim.phase === "playing" && viewer.passLock <= 0 &&
+        canPass: !!(sim.phase === "playing" && !viewer.taunting && viewer.passLock <= 0 &&
           ((b && !b.transfer && b.holderId === viewerId) || fakeHeldBy(sim, viewerId))),
         // Eliminated players always see the exact bomb timer. Living players
         // still need an active Magnifying Glass covering the bomb.
         reveal: (b && sim.phase === "playing" &&
             (!viewer.alive ||
-              (viewer.revealRemaining > 0 && magnifyCoversPos(sim, viewer, bombPos))))
+              (!shieldCoversBomb(sim) && viewer.revealRemaining > 0 &&
+                magnifyCoversPos(sim, viewer, bombPos))))
           ? { remaining: viewer.revealRemaining, bombTime: b.remaining }
           : null,
         // Private farmed-pot cash-in cue: bumps `seq` every payout so the
         // client can pop a one-shot "+N" even if the amount repeats. Never
         // sent to anyone but the thrower — showing it publicly would out a
         // decoy the instant its (nonexistent) payout failed to appear.
-        payout: { amount: viewer.lastPayoutAmount, seq: viewer.lastPayoutSeq },
+        payout: {
+          amount: viewer.lastPayoutAmount,
+          seq: viewer.lastPayoutSeq,
+          sourceX: viewer.lastPayoutSourceX,
+          sourceY: viewer.lastPayoutSourceY,
+        },
       } : null,
       projectiles: sim.projectiles.map(pr => ({
         x: pr.x, y: pr.y, amount: pr.amount, isClaw: !!pr.isClaw,
         ox: pr.isClaw ? pr.ox : undefined, oy: pr.isClaw ? pr.oy : undefined,
       })),
       events: sim.events.slice(-30),
-      effects: sim.effects.slice(-8),
+      effects: sim.effects.slice(-16),
     };
 
     if (includeDebug) snap.debug = buildDebug(sim);

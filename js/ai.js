@@ -1,7 +1,7 @@
 "use strict";
 
 // Host-side bots for solo testing. A bot produces exactly the same plain
-// input shape a network client sends ({ mx, my, pass, draw, use }), so the
+// input shape a network client sends ({ mx, my, pass, use, primaryFire }), so the
 // sim treats humans and bots identically and bots get no special authority.
 const AI = (() => {
   const C = CONFIG;
@@ -22,8 +22,8 @@ const AI = (() => {
 
   function botInput(sim, player, brain) {
     const inp = {
-      mx: player.aim.x, my: player.aim.y, pass: false, draw: false, use: [],
-      deadFire: false,
+      mx: player.aim.x, my: player.aim.y, pass: false, use: [],
+      primaryFire: false, gunFireSlot: null,
     };
     if (!player.alive) {
       // Dead bots use the same permanent interference weapon as humans. They
@@ -34,14 +34,14 @@ const AI = (() => {
         const bombPos = Sim.bombWorldPos(sim);
         inp.mx = bombPos.x;
         inp.my = bombPos.y;
-        inp.deadFire = player.deadWeaponCharge + 1e-9 < C.DeadWeaponChargeTime;
+        inp.primaryFire = player.deadWeaponCharge + 1e-9 < C.ChargedShotChargeTime;
+        // Slot 0 holds this round's ghost item card, same as a human's hand.
+        if (player.hand[0] && sim.time >= brain.nextActAt && Math.random() < 0.35) {
+          inp.use.push(0);
+          brain.nextActAt = sim.time + 2;
+        }
       }
       return inp;
-    }
-
-    // Draw whenever affordable (lightly throttled by chance per tick).
-    if (player.coins >= C.CardDrawCost && player.hand.includes(null) && Math.random() < 0.01) {
-      inp.draw = true;
     }
 
     if (sim.phase !== "playing" || !sim.bomb) return inp;
@@ -116,7 +116,8 @@ const AI = (() => {
         } else {
           inp.equip = brain.aimSlot;
           if (sim.time >= brain.aimReadyAt) {
-            inp.use.push(brain.aimSlot);
+            if (Cards.TYPES[heldCard].gunStyle === "auto") inp.gunFireSlot = brain.aimSlot;
+            else inp.use.push(brain.aimSlot);
             brain.aimSlot = null;
           }
         }
