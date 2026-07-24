@@ -137,6 +137,7 @@ const Render = (() => {
         ctx.fillText(f.privateRemaining.toFixed(1) + "s", f.x, f.y);
         ctx.textBaseline = "alphabetic";
       }
+      drawPotBadge(ctx, f.x, f.y, f.pot);
     }
 
     // Arms: body -> hands -> bomb, only for the current holder, and only
@@ -464,6 +465,32 @@ const Render = (() => {
       ctx.fillText(b.publicRemaining.toFixed(1) + "s", b.x, b.y);
       ctx.textBaseline = "alphabetic";
     }
+    drawPotBadge(ctx, b.x, b.y, b.pot);
+  }
+
+  // Farmed-pot badge, shown on the bomb itself while it's being held — public
+  // to everyone, and drawn identically for a fake decoy (see the fakeBombs
+  // loop in draw()) so the number on screen never tells the two apart. Only
+  // whether it actually pays out on release stays private.
+  function drawPotBadge(ctx, x, y, pot) {
+    if (!pot) return;
+    const text = `💰${pot}`;
+    ctx.font = "bold 13px sans-serif";
+    const padX = 6, padY = 3;
+    const w = ctx.measureText(text).width + padX * 2;
+    const h = 16 + padY * 2 - 4;
+    const bx = x, by = y + C.BombRadius + 16;
+    ctx.fillStyle = "rgba(20,22,28,0.82)";
+    ctx.strokeStyle = "rgba(255,213,76,0.7)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, bx - w / 2, by - h / 2, w, h, 5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#ffd54c";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, bx, by + 1);
+    ctx.textBaseline = "alphabetic";
   }
 
   // The bomb silhouette (body + fuse + flickering spark), shared verbatim by

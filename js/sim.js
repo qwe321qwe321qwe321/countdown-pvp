@@ -1142,6 +1142,11 @@ const Sim = (() => {
         // the first few real seconds of a bomb, then it goes hidden as usual.
         publicRemaining: (sim.phase === "playing" && sim.playElapsed < C.PublicTimeRevealDuration)
           ? b.remaining : null,
+        // The farmed pot itself is public — everyone watching the bomb sees
+        // it grow while it's held, same as a fake's identical pot (see
+        // fakeBombs below). Only whether it actually pays out on release is
+        // ever private, so the number on screen never gives the bluff away.
+        pot: b.pot,
       } : null,
       // Fake decoys, rendered with the identical bomb body + holder arms as
       // the real one. Which one is real is never derivable from position,
@@ -1156,6 +1161,9 @@ const Sim = (() => {
           claw: !!(f.transfer && f.transfer.claw),
           clawX: f.transfer && f.transfer.claw ? f.transfer.toPos.x : null,
           clawY: f.transfer && f.transfer.claw ? f.transfer.toPos.y : null,
+          // Same public pot display as the real bomb — a fake accrues and
+          // shows an identical number, it just never actually pays out.
+          pot: f.pot,
           // Per-viewer private read of the decoy's timer, delivered only
           // inside this viewer's snapshot. Present in two cases, both
           // identical to how the real bomb reveals so a fake stays hidden:
