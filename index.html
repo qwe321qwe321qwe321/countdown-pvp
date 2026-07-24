@@ -52,6 +52,10 @@
   #cardCodex { display: flex; flex-direction: column; gap: 8px; max-height: 640px; overflow-y: auto; }
   .codexRow { display: flex; gap: 8px; align-items: flex-start; background: #14161a; border-radius: 6px; padding: 6px 8px; }
   .codexEmoji { font-size: 20px; line-height: 1.3; }
+  .codexTag { display: inline-block; margin-bottom: 3px; border-radius: 999px; padding: 1px 6px; font-size: 9px; font-weight: bold; letter-spacing: .5px; color: #dce5f5; background: #3a4150; }
+  .codexTag1 { color: #ffd9ce; background: #7a3f32; }
+  .codexTag2 { color: #d9f2ff; background: #28586d; }
+  .codexTag3 { color: #f1ddff; background: #593d70; }
   .codexName { font-size: 12px; font-weight: bold; color: #e8e8e8; }
   .codexDesc { font-size: 11px; color: #9aa4b2; line-height: 1.45; margin-top: 1px; }
   #eventLog { font-size: 12px; background: #14161a; border-radius: 6px; padding: 8px; height: 130px; overflow-y: auto; }
@@ -156,7 +160,7 @@
       </div>
       <div id="infoCol">
         <div class="panel" style="padding:8px">
-          <h2>Items</h2>
+          <h2 id="codexTitle">Round Draw Pool</h2>
           <div id="cardCodex"></div>
         </div>
       </div>
@@ -180,14 +184,14 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <!-- ?v= cache-buster: bump it whenever the game scripts change, so nobody
      plays a stale mix of old and new code out of the browser cache. -->
-<script src="js/config.js?v=6"></script>
-<script src="js/cards.js?v=6"></script>
-<script src="js/sim.js?v=6"></script>
-<script src="js/ai.js?v=6"></script>
-<script src="js/net.js?v=6"></script>
-<script src="js/host.js?v=6"></script>
-<script src="js/client.js?v=6"></script>
-<script src="js/render.js?v=6"></script>
-<script src="js/main.js?v=6"></script>
+<script src="js/config.js?v=7"></script>
+<script src="js/cards.js?v=7"></script>
+<script src="js/sim.js?v=7"></script>
+<script src="js/ai.js?v=7"></script>
+<script src="js/net.js?v=7"></script>
+<script src="js/host.js?v=7"></script>
+<script src="js/client.js?v=7"></script>
+<script src="js/render.js?v=7"></script>
+<script src="js/main.js?v=7"></script>
 </body>
 </html>

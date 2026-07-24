@@ -47,34 +47,6 @@
   const canvas = $("game");
   const ctx = canvas.getContext("2d");
 
-  // ---- Item codex (right-side reference panel) ----
-  // Static list of every card actually obtainable this match (drop pool +
-  // starting hand), built once from the same Cards.TYPES the game runs on.
-  (function buildCodex() {
-    const wrap = $("cardCodex");
-    if (!wrap) return;
-    const ids = Object.keys(Cards.TYPES).filter(id =>
-      (CONFIG.CardDropWeights[id] || 0) > 0 || CONFIG.StartingHand.includes(id));
-    for (const id of ids) {
-      const def = Cards.TYPES[id];
-      const row = document.createElement("div");
-      row.className = "codexRow";
-      const emoji = document.createElement("div");
-      emoji.className = "codexEmoji";
-      emoji.textContent = def.emoji;
-      const body = document.createElement("div");
-      const name = document.createElement("div");
-      name.className = "codexName";
-      name.textContent = def.name;
-      const desc = document.createElement("div");
-      desc.className = "codexDesc";
-      desc.textContent = def.desc || "";
-      body.append(name, desc);
-      row.append(emoji, body);
-      wrap.appendChild(row);
-    }
-  })();
-
   // ---- Player name persistence ----
   const NAME_KEY = "countdown-pvp:playerName";
   const savedName = localStorage.getItem(NAME_KEY);
@@ -199,6 +171,8 @@
     btnPass: $("btnPass"),
     btnDraw: $("btnDraw"),
     eventLog: $("eventLog"),
+    cardCodex: $("cardCodex"),
+    codexTitle: $("codexTitle"),
     debugPanel: $("debugPanel"),
     matchOverBar: $("matchOverBar"),
     matchOverText: $("matchOverText"),

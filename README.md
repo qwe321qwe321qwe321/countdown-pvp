@@ -28,6 +28,10 @@ host lobby and play solo for testing.
 | 1 / 2 / 3 (or click) | Use the card in that hand slot |
 | R (or Draw button) | Draw a random card for `CardDrawCost` coins, up to `MaxHandSize` |
 
+At the start of each bomb/round, the host rolls a new four-card draw pool shared
+by everyone: Magnifying Glass, one attack card, one defense card, and one other
+non-duplicate random card. The right-side codex shows the current round's pool.
+
 ## Architecture (host authoritative)
 
 One browser (the host) runs the entire simulation; every other browser only sends inputs

@@ -722,12 +722,48 @@ const Render = (() => {
   // ---- DOM panels ----------------------------------------------------------
 
   let lastHandSig = null;
+  let lastCodexSig = null;
   let lastEventSeq = 0;
 
-  // dom: { coinDisplay, statusLine, hand, btnPass, btnDraw, eventLog, debugPanel, matchOverBar, matchOverText, aimHint }
+  // dom: { coinDisplay, statusLine, hand, btnPass, btnDraw, eventLog,
+  //        cardCodex, codexTitle, debugPanel, matchOverBar, matchOverText, aimHint }
   // hooks: { useCard(slot), discardCard(slot), armedSlot, isHost }
   function updateDom(dom, snap, hooks) {
     const you = snap.you;
+
+    // The right-side codex is the authoritative draw pool for this round, not
+    // a static list of every card in the game. Pool order carries its role:
+    // fixed Magnifying Glass, attack roll, defense roll, unrestricted roll.
+    const roundIds = snap.roundCardPool || [];
+    const codexSig = JSON.stringify([snap.roundNumber, roundIds]);
+    if (dom.cardCodex && codexSig !== lastCodexSig) {
+      lastCodexSig = codexSig;
+      if (dom.codexTitle) dom.codexTitle.textContent = `Round ${snap.roundNumber} Draw Pool`;
+      dom.cardCodex.innerHTML = "";
+      const roleNames = ["FIXED", "ATTACK", "DEFENSE", "RANDOM"];
+      for (let i = 0; i < roundIds.length; i++) {
+        const def = Cards.TYPES[roundIds[i]];
+        if (!def) continue;
+        const row = document.createElement("div");
+        row.className = "codexRow";
+        const emoji = document.createElement("div");
+        emoji.className = "codexEmoji";
+        emoji.textContent = def.emoji;
+        const body = document.createElement("div");
+        const tag = document.createElement("div");
+        tag.className = `codexTag codexTag${i}`;
+        tag.textContent = roleNames[i] || "RANDOM";
+        const name = document.createElement("div");
+        name.className = "codexName";
+        name.textContent = def.name;
+        const desc = document.createElement("div");
+        desc.className = "codexDesc";
+        desc.textContent = def.desc || "";
+        body.append(tag, name, desc);
+        row.append(emoji, body);
+        dom.cardCodex.appendChild(row);
+      }
+    }
 
     if (you) {
       const me = snap.players.find(p => p.id === you.id);
@@ -898,6 +934,7 @@ const Render = (() => {
 
   function resetDomCache() {
     lastHandSig = null;
+    lastCodexSig = null;
     lastEventSeq = 0;
     lastPayoutSeq = 0;
     payoutFloatStart = null;
