@@ -910,10 +910,11 @@ const Sim = (() => {
           p.holderAcc = 0;
         } else {
           p.holderAcc += dt;
-          const holderInterval = C.BombHolderCoinInterval * coinScale;
-          while (p.holderAcc >= holderInterval) {
-            p.holderAcc -= holderInterval;
-            heldBomb.pot += C.BombHolderCoinAmount;
+          // Flat rate, deliberately not scaled by coinScale — farming speed
+          // is the same 2 coins/s no matter how many players are seated.
+          while (p.holderAcc >= C.BombHolderCoinInterval && heldBomb.pot < C.BombHolderPotCap) {
+            p.holderAcc -= C.BombHolderCoinInterval;
+            heldBomb.pot = Math.min(C.BombHolderPotCap, heldBomb.pot + C.BombHolderCoinAmount);
           }
         }
       } else {

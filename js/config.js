@@ -41,10 +41,11 @@ const CONFIG = {
   StartingCoins: 0,
   PassiveCoinInterval: 1,               // natural growth: 1 coin/s at the 3-player baseline
   PassiveCoinAmount: 1,
-  // Farming the bomb (pot accrual, cashed out on throw) runs at 2x the
-  // passive rate — half the interval, same amount per tick.
+  // Farming the bomb (pot accrual, cashed out on throw) is a flat 2 coins/s
+  // for everyone — unlike passive income it does NOT scale with seat count.
   BombHolderCoinInterval: 0.5,
   BombHolderCoinAmount: 1,
+  BombHolderPotCap: 10,                   // pot stops growing once it hits this, even if held longer
   BombHolderCoinDuration: 10.0,           // grace window per hold; past it the holder earns nothing at all (stalling penalty)
 
   // ---- Cards ----
