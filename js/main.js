@@ -175,6 +175,7 @@
     matchOverBar: $("matchOverBar"),
     matchOverText: $("matchOverText"),
     btnRematch: $("btnRematch"),
+    btnToLobby: $("btnToLobby"),
   };
 
   // ---- Canvas / keyboard input ----
@@ -399,6 +400,7 @@
   };
 
   $("btnRematch").onclick = () => { if (hostSession) hostSession.rematch(); };
+  $("btnToLobby").onclick = () => { if (hostSession) { hostSession.toLobby(); show("host-lobby"); } };
 
   // ---- Join flow ----
 
@@ -422,6 +424,7 @@
       onReject: reason => { $("joinStatus").textContent = "Rejected: " + reason; },
       onLobby: roster => renderSeats($("clientSeatList"), roster),
       onStart: enterGame,
+      onReturnToLobby: () => show("client-lobby"),
       onSnapshot: snap => { latestSnap = snap; },
       onClosed: () => {
         alert("Disconnected from host.");

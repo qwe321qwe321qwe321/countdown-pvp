@@ -8,6 +8,7 @@ const Client = (() => {
   //   collector,              // local input collector (shared shape with host)
   //   onWelcome(playerId), onReject(reason),
   //   onLobby(roster, pool), onStart(), onSnapshot(snap),
+  //   onReturnToLobby(),      // host ended the match and reopened the lobby
   //   onClosed(), onError(err),
   // }
   function createSession(opts) {
@@ -24,6 +25,7 @@ const Client = (() => {
           case "reject": opts.onReject(msg.reason); break;
           case "lobby": opts.onLobby(msg.roster, msg.pool); break;
           case "start": opts.onStart(); break;
+          case "tolobby": opts.onReturnToLobby && opts.onReturnToLobby(); break;
           case "snap": opts.onSnapshot(msg.snap); break;
         }
       },

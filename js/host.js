@@ -187,12 +187,25 @@ const Host = (() => {
       if (sim && sim.phase === "matchover") Sim.resetMatch(sim);
     }
 
+    // Tear the running match down and reopen the room so everyone drops back to
+    // the lobby with their connection intact — no re-inviting. The host can
+    // then tweak bots/pool and Start Match again. Clients are told to return
+    // to their lobby via a broadcast; the fresh lobby roster follows.
+    function toLobby() {
+      if (!started) return;
+      if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+      sim = null;
+      started = false;
+      net.broadcast({ type: "tolobby" });
+      lobbyChanged();
+    }
+
     function destroy() {
       if (tickTimer) clearInterval(tickTimer);
       net.close();
     }
 
-    return { addBot, removeBot, setPool, start, rematch, destroy, getPool: () => pool.slice() };
+    return { addBot, removeBot, setPool, start, rematch, toLobby, destroy, getPool: () => pool.slice() };
   }
 
   return { createSession };

@@ -712,6 +712,7 @@ const Render = (() => {
       dom.matchOverBar.style.display = "flex";
       dom.matchOverText.textContent = snap.winnerName ? `${snap.winnerName} wins!` : "Match over";
       dom.btnRematch.style.display = hooks.isHost ? "inline-block" : "none";
+      if (dom.btnToLobby) dom.btnToLobby.style.display = hooks.isHost ? "inline-block" : "none";
     } else {
       dom.matchOverBar.style.display = "none";
     }

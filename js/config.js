@@ -32,10 +32,16 @@ const CONFIG = {
   MagnifyCastWidth: 36,                   // box-cast full width (perpendicular to the aim direction)
 
   // ---- Coin economy (integers only) ----
+  // The rates below (interval/amount) are tuned for a 3-player match. Per-
+  // player income is scaled down proportionally as the seat count rises
+  // above that baseline, so total coin generation across the table stays
+  // roughly constant instead of climbing with every extra player — see
+  // Sim.coinIntervalScale(sim), applied to the *Interval fields at use time.
+  CoinEconomyBaselinePlayers: 3,
   StartingCoins: 0,
-  PassiveCoinInterval: 1.0,               // natural growth: 1 coin/s
+  PassiveCoinInterval: 1,               // natural growth: 1 coin/s at the 3-player baseline
   PassiveCoinAmount: 1,
-  BombHolderCoinInterval: 1.0,            // holder bonus stacks on top of passive income: +1 coin/s while holding = 2/s total
+  BombHolderCoinInterval: 1.0,            // holder bonus stacks on top of passive income: +1 coin/s while holding = 2/s total, at baseline
   BombHolderCoinAmount: 1,
   BombHolderCoinDuration: 10.0,           // grace window per hold; past it the holder earns nothing at all (stalling penalty)
 
@@ -52,7 +58,7 @@ const CONFIG = {
     gun1: 0,
     gun3: 0,
     gun5: 10,
-    repair5: 10,
+    repair5: 8,
     repair10: 0,
     speedup: 10,
     slowdown: 6,
