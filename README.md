@@ -70,7 +70,7 @@ the result with an opaque transfer id, so network round-trip latency cannot spoi
   the round ends.
 - **Local parry timing**: an incoming ordinary pass exposes a local punish window followed by
   a parry window. Pressing in punish locks out that transfer; pressing in parry immediately
-  returns it at incoming speed ×1.5. Consecutive returns compound (1.5×, 2.25×, 3.375×…).
+  returns it at incoming speed ×1.5, up to the global pass-speed cap.
   The host validates the receiver and transfer id, and accepts a short late result only while
   that exact bomb is still in the receiver's hands.
 - **Bomb arm control**: the holder sends only a mouse position; the host computes the bomb

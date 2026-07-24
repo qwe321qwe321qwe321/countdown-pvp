@@ -414,18 +414,19 @@ const Sim = (() => {
   // Every ordinary throw gets an opaque id and carries its actual world
   // speed. Clients use only the raw duration/remaining values to run the
   // punish/parry clock locally; the host never judges which timing window a
-  // press landed in. Keeping speed on the transfer is what lets consecutive
-  // successful parries multiply the previous throw exactly.
+  // press landed in. Speed is retained for parry scaling, but every transfer
+  // is capped so a parry chain can never accelerate without bound.
   function makePassTransfer(sim, fromId, toId, fromPos, toPos, speed) {
+    const cappedSpeed = Math.min(C.BombPassSpeedCap, Math.max(1, speed));
     return {
       id: sim.nextTransferId++,
       fromId,
       toId,
       elapsed: 0,
-      duration: Math.max(0.001, dist(fromPos, toPos) / speed),
+      duration: Math.max(0.001, dist(fromPos, toPos) / cappedSpeed),
       fromPos,
       toPos,
-      speed,
+      speed: cappedSpeed,
       parryable: true,
       parryQueued: false,
       parryDenied: false,
@@ -471,7 +472,8 @@ const Sim = (() => {
     }
 
     const toPos = seatPosition(next.seat, sim.seatCount);
-    const speed = incomingSpeed * C.ParrySpeedMultiplier;
+    const speed = Math.min(C.BombPassSpeedCap,
+      incomingSpeed * C.ParrySpeedMultiplier);
     bombLike.holderId = receiver.id;
     bombLike.pot = 0;
     bombLike.transfer = makePassTransfer(sim, receiver.id, next.id, fromPos, toPos, speed);

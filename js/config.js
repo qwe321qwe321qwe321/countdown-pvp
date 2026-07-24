@@ -14,6 +14,7 @@ const CONFIG = {
   BaseMinimumHoldTime: 0,                 // no forced hold before an uncursed bomb can be passed again
   CurseMinimumHoldTime: 5.0,              // pass lock when receiving a cursed bomb
   BombPassSpeed: 300,                     // world units/sec the bomb travels while mid-pass between seats
+  BombPassSpeedCap: 900,                  // hard cap across reinforced throws and chained parries
   ParryPunishWindow: 0.35,                // local-only no-press window immediately before the parry window
   ParryWindow: 0.20,                      // local-only SPACE timing window at the end of an incoming pass
   ParrySpeedMultiplier: 1.5,              // successful returns multiply the exact incoming travel speed
@@ -153,6 +154,14 @@ const CONFIG = {
   // ---- Bots ----
   BotAimDuration: 0.35,                   // seconds a bot must hold its weapon raised & aimed before it actually fires
   BotAimJitter: 0.35,                     // extra random 0..this seconds added on top, so bots don't all fire in lockstep
+  BotProjectileAwarenessTime: 0.65,       // only shots predicted to arrive this soon are noticed
+  BotProjectileNoticeChance: 0.55,        // bots sometimes fail to notice a threatening shot entirely
+  BotDodgeReactionMin: 0.28,              // human-like delay between noticing a shot and moving the bomb
+  BotDodgeReactionJitter: 0.30,
+  BotDodgeAimError: 24,                   // imperfect sideways dodge target, in world units
+  BotParryChance: 0.08,                   // ordinary bots should only very rarely attempt a parry
+  BotParryMaxIncomingSpeed: 600,           // faster throws are outside a bot's plausible reaction limit
+  BotKnownBombPanicTime: 5.0,             // recently observed low timer => pass at first legal instant
 
   // ---- Teams ----
   TeamCountOptions: [1, 2, 3, 4],          // 1 = no teams (free-for-all)
