@@ -449,12 +449,12 @@ const Render = (() => {
     ctx.fill();
   }
 
-  // Staged blast, used for real mid-air explosions and fake-bomb pops alike:
-  // the bomb freezes showing "0.0s" for ExplosionHoldDuration, then a ring
-  // expands until it reaches the victim (or a default radius when there is
-  // no victim to reach), then keeps growing fast while fading out.
-  function drawStagedBlast(ctx, at, victimPos, elapsed, time) {
-    if (elapsed < C.ExplosionHoldDuration) {
+  // Staged blast, used for every explosion real or fake: an optional frozen
+  // "0.0s" beat (`hold` seconds — mid-air blasts only), then a ring expands
+  // until it reaches the victim (or a default radius when there is no victim
+  // to reach), then keeps growing fast while fading out.
+  function drawStagedBlast(ctx, at, victimPos, elapsed, time, hold) {
+    if (elapsed < hold) {
       drawBombBody(ctx, at.x, at.y, time);
       ctx.font = "bold 17px monospace";
       ctx.textAlign = "center";
@@ -464,7 +464,7 @@ const Render = (() => {
       ctx.textBaseline = "alphabetic";
       return;
     }
-    const t = elapsed - C.ExplosionHoldDuration;
+    const t = elapsed - hold;
     const targetR = victimPos
       ? Math.max(30, Math.hypot(victimPos.x - at.x, victimPos.y - at.y) - C.PlayerBodyRadius)
       : 140;

@@ -28,7 +28,7 @@ const Cards = (() => {
       desc: `Holder only: blocks anything hitting the bomb for ${CONFIG.ShieldDuration}s.` },
     curse:    { name: "Curse",  emoji: "☠️", kind: "curse",
       desc: `The next player to receive the bomb is locked from passing for ${CONFIG.CurseMinimumHoldTime}s.` },
-    grapple:    { name: "Grapple Claw",   emoji: "🪝", kind: "grapple",
+    grapple:    { name: "Grapple Claw",   emoji: "🧲", kind: "grapple",
       desc: "Fire a claw at the bomb — wherever it is, even mid-pass — and reel it in to yourself." },
     reinforced: { name: "Reinforced Arm", emoji: "🦾", kind: "reinforced",
       desc: `For ${CONFIG.ReinforcedArmDuration}s: pass to whoever you aim at (any seat) and your passes fly ${CONFIG.ReinforcedArmSpeedMult}x faster.` },
