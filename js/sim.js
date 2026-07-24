@@ -204,11 +204,21 @@ const Sim = (() => {
     const seats = shuffledSeats(roster.length);
     const tc = Math.max(1, Math.min(teamCount || 1, roster.length));
     const teams = assignTeams(roster.length, tc);
+    const requestedJamDuration = Number(
+      requestedModes && requestedModes.shockGunJamDuration);
+    const clampedJamDuration = Number.isFinite(requestedJamDuration)
+      ? Math.max(C.ShockGunJamDurationMin,
+        Math.min(C.ShockGunJamDurationMax, requestedJamDuration))
+      : C.ShockGunJamDurationDefault;
     const modes = {
       publicSeconds: !!(requestedModes && requestedModes.publicSeconds),
       doubleBomb: !!(requestedModes && requestedModes.doubleBomb),
       roguelikeShop: !!(requestedModes && requestedModes.roguelikeShop),
       wobblyHitscan: !!(requestedModes && requestedModes.wobblyHitscan),
+      shockGunJamDuration: Math.round(
+        clampedJamDuration / C.ShockGunJamDurationStep) *
+        C.ShockGunJamDurationStep,
+      useEmpCard: !!(requestedModes && requestedModes.useEmpCard),
     };
     const sim = {
       seatCount: roster.length,
@@ -295,9 +305,14 @@ const Sim = (() => {
     sim.roundNumber++;
     const poolBans = [];
     if (sim.players.length === 2) poolBans.push("reverse");
-    if (sim.modes.publicSeconds) poolBans.push("magnify");
+    if (sim.modes.publicSeconds) {
+      poolBans.push("magnify");
+      poolBans.push(sim.modes.useEmpCard ? "shockgun" : "emp");
+    } else {
+      poolBans.push("shockgun", "emp");
+    }
     sim.roundCardPool = sim.modes.roguelikeShop
-      ? Cards.enabledCardIds(sim.modes.publicSeconds ? ["magnify"] : null)
+      ? Cards.enabledCardIds(poolBans.length ? poolBans : null)
       : sim.modes.publicSeconds
         ? Cards.rollAnyPool(4, sim.roundCardPool, poolBans)
         : Cards.rollRoundPool(sim.roundCardPool,
@@ -339,6 +354,7 @@ const Sim = (() => {
       shieldRemaining: 0,
       shieldOwnerId: null,
       curseActive: false,
+      timerJamRemaining: 0,
       pot: 0,                     // farming income accrued while held; paid to whoever throws it
       transfer: target
         ? { fromId: null, toId: target.id, elapsed: 0, duration: travelWindow, fromPos, toPos }
@@ -365,6 +381,7 @@ const Sim = (() => {
         shieldRemaining: 0,
         shieldOwnerId: null,
         curseActive: false,
+        timerJamRemaining: 0,
         pot: 0,
         transfer: secondTarget
           ? {
@@ -821,6 +838,7 @@ const Sim = (() => {
       shieldRemaining: f.shieldRemaining || 0,
       shieldOwnerId: f.shieldOwnerId || null,
       curseActive: !!f.curseActive,
+      timerJamRemaining: f.timerJamRemaining || 0,
       pot: f.pot || 0,
       transfer: f.transfer,
     };
@@ -871,7 +889,12 @@ const Sim = (() => {
 
   function shopChoiceBans(sim, p, slot) {
     const bans = [];
-    if (sim.modes.publicSeconds) bans.push("magnify");
+    if (sim.modes.publicSeconds) {
+      bans.push("magnify");
+      bans.push(sim.modes.useEmpCard ? "shockgun" : "emp");
+    } else {
+      bans.push("shockgun", "emp");
+    }
     for (let i = 0; i < C.RoguelikeChoiceCount; i++) {
       if (i !== slot && p.hand[i]) bans.push(p.hand[i]);
     }
@@ -992,6 +1015,17 @@ const Sim = (() => {
         break;
       }
 
+      case "emp":
+        if (!sim.modes.publicSeconds || !sim.modes.useEmpCard || !pay()) return;
+        b.timerJamRemaining = sim.modes.shockGunJamDuration;
+        for (const f of sim.fakeBombs) {
+          f.timerJamRemaining = sim.modes.shockGunJamDuration;
+        }
+        consume();
+        addEvent(sim,
+          `E.M.P ACTIVATED — ALL DISPLAYS ### (${sim.modes.shockGunJamDuration}s)`);
+        break;
+
       case "shield":
         // Any living player can raise their personal bubble, regardless of
         // who is holding the bomb or whether it is currently in flight.
@@ -1011,6 +1045,8 @@ const Sim = (() => {
         break;
 
       case "projectile": {
+        if (def.hitscanOnly &&
+            (!sim.modes.publicSeconds || sim.modes.useEmpCard)) return;
         // A player holding a weapon needs both hands free to aim it, and a
         // bomb holder's hands are full holding the bomb — real or fake, the
         // rule must match or the decoy gives itself away. Once a bomb has
@@ -1020,7 +1056,7 @@ const Sim = (() => {
         // Repair kits remain physical throws. Gun cards delegate to their own
         // magazine/spread/cooldown behavior and become instantaneous rays only
         // when the experimental wobbly-hitscan mode is enabled.
-        if (def.amount < 0) {
+        if (def.amount < 0 || def.hitscanOnly) {
           fireGunRound(sim, p, slot);
         } else {
           if (!pay()) return;
@@ -1065,6 +1101,7 @@ const Sim = (() => {
           holderId: p.id,
           offset: { x: 0, y: 0 },
           transfer: null,
+          timerJamRemaining: 0,
           pot: 0,                 // accrues + animates like the real bomb, but never pays out on release
 
           // The creator alone gets to read the decoy's rolled timer for a
@@ -1123,7 +1160,8 @@ const Sim = (() => {
   function fireGunRound(sim, p, slot) {
     const cardId = p.hand[slot];
     const def = cardId && Cards.TYPES[cardId];
-    if (!def || def.kind !== "projectile" || def.amount >= 0 || holdsAnyBomb(sim, p)) return false;
+    if (!def || def.kind !== "projectile" ||
+        (def.amount >= 0 && !def.hitscanOnly) || holdsAnyBomb(sim, p)) return false;
     if (!payForShopChoice(sim, p, slot)) return false;
 
     let pending = p.gunPending;
@@ -1151,8 +1189,11 @@ const Sim = (() => {
         if (amount) addEvent(sim, `${amount} SEC`, at.x, at.y);
       }
     } else {
-      if (sim.modes.wobblyHitscan) fireHitscan(sim, p, cardId, def.amount);
-      else fireProjectile(sim, p, def.amount, C.ProjectileSpeed);
+      if (def.hitscanOnly || sim.modes.wobblyHitscan) {
+        fireHitscan(sim, p, cardId, def.amount);
+      } else {
+        fireProjectile(sim, p, def.amount, C.ProjectileSpeed);
+      }
     }
     pending.shotsLeft--;
     pending.nextShotAt = sim.time + gunCooldown(def);
@@ -1230,6 +1271,9 @@ const Sim = (() => {
   // The deterministic wobble is visible before firing; a second random angle
   // is deliberately unknowable and is rolled for every individual pellet.
   function fireHitscan(sim, p, weaponId, amount, angleOffset, suppressRealEvent) {
+    const def = Cards.TYPES[weaponId];
+    const jamsTimer = !!(def && def.hitscanOnly);
+    const extraRayRadius = jamsTimer ? C.ShockGunRayRadius : 0;
     const seat = seatPosition(p.seat, sim.seatCount);
     let dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
     const aimLength = Math.hypot(dx, dy);
@@ -1264,15 +1308,16 @@ const Sim = (() => {
     const bubble = shieldBubble(sim);
     const shieldOwner = sim.bomb && sim.bomb.shieldOwnerId;
     if (bubble && p.id !== shieldOwner) {
-      consider("shield", null, bubble, C.BombArmReach);
+      consider("shield", null, bubble, C.BombArmReach + extraRayRadius);
     }
     const bombPos = bombWorldPos(sim);
     if (sim.bomb && sim.bomb.holderId) {
-      consider("real", sim.bomb, bombPos, C.BombRadius + C.ProjectileRadius);
+      consider("real", sim.bomb, bombPos,
+        C.BombRadius + C.ProjectileRadius + extraRayRadius);
     }
     for (const fake of sim.fakeBombs) {
       consider("fake", fake, fakeWorldPos(sim, fake),
-        C.BombRadius + C.ProjectileRadius);
+        C.BombRadius + C.ProjectileRadius + extraRayRadius);
     }
 
     const impact = {
@@ -1288,6 +1333,12 @@ const Sim = (() => {
     }
 
     if (nearest.type === "fake") {
+      if (jamsTimer) {
+        nearest.target.timerJamRemaining = sim.modes.shockGunJamDuration;
+        addEvent(sim, `DISPLAY JAMMED — ### (${sim.modes.shockGunJamDuration}s)`,
+          nearest.center.x, nearest.center.y);
+        return null;
+      }
       nearest.target.remaining += amount;
       addEvent(sim, `${amount > 0 ? "+" : ""}${amount} SEC`,
         nearest.center.x, nearest.center.y);
@@ -1312,6 +1363,13 @@ const Sim = (() => {
     }
     if (b.speedMult === 0 && b.speedRemaining > 0) {
       addEvent(sim, "FROZEN — NO EFFECT", bombPos.x, bombPos.y);
+      return null;
+    }
+
+    if (jamsTimer) {
+      b.timerJamRemaining = sim.modes.shockGunJamDuration;
+      addEvent(sim, `DISPLAY JAMMED — ### (${sim.modes.shockGunJamDuration}s)`,
+        bombPos.x, bombPos.y);
       return null;
     }
 
@@ -1655,6 +1713,9 @@ const Sim = (() => {
       if (b.speedRemaining <= 0) { b.speedMult = 1; b.speedRemaining = 0; }
     }
     if (b.shieldRemaining > 0) b.shieldRemaining = Math.max(0, b.shieldRemaining - dt);
+    if (b.timerJamRemaining > 0) {
+      b.timerJamRemaining = Math.max(0, b.timerJamRemaining - dt);
+    }
     if (sim.blackoutRemaining > 0) {
       sim.blackoutRemaining = Math.max(0, sim.blackoutRemaining - dt);
       sim.blackoutElapsed += dt;
@@ -1896,6 +1957,9 @@ const Sim = (() => {
         }
       }
       if (countDown !== false) f.remaining -= dt * (f.speedMult == null ? 1 : f.speedMult);
+      if (countDown !== false && f.timerJamRemaining > 0) {
+        f.timerJamRemaining = Math.max(0, f.timerJamRemaining - dt);
+      }
       if (f.revealRemaining > 0) f.revealRemaining = Math.max(0, f.revealRemaining - dt);
       if (f.remaining <= 0) {
         if (f.lethal) {
@@ -2068,6 +2132,7 @@ const Sim = (() => {
         shieldOwnerId: b.shieldOwnerId,
         curse: b.curseActive,              // announced publicly, so visible
         speedMult: b.speedMult,            // Speed Up/Down are announced publicly too
+        timerJammed: b.timerJamRemaining > 0,
         transferring: !!b.transfer,        // in flight between seats: render it mid-pass
         // Being reeled in by a Grapple Claw: render a cable + claw gripping
         // the bomb, anchored at the puller's seat (the transfer target).
@@ -2101,6 +2166,7 @@ const Sim = (() => {
           // Same public pot display as the real bomb — a fake accrues and
           // shows an identical number, it just never actually pays out.
           pot: f.pot,
+          timerJammed: f.timerJamRemaining > 0,
           publicRemaining: (
             sim.modes.publicSeconds ||
             (f.lethal && (
@@ -2267,6 +2333,7 @@ const Sim = (() => {
       speedRemaining: b ? b.speedRemaining : null,
       shieldActive: !!(b && b.shieldRemaining > 0),
       shieldRemaining: b ? b.shieldRemaining : null,
+      timerJamRemaining: b ? b.timerJamRemaining : null,
       curseActive: !!(b && b.curseActive),
       nextReceiverMinHold: b && b.curseActive ? C.CurseMinimumHoldTime : C.BaseMinimumHoldTime,
       passLockRemaining: holder ? holder.passLock : null,
@@ -2279,6 +2346,7 @@ const Sim = (() => {
         holder: f.holderId ? ((getPlayer(sim, f.holderId) || {}).name || f.holderId) : "-",
         to: f.transfer ? ((getPlayer(sim, f.transfer.toId) || {}).name || "?") : null,
         remaining: f.remaining,
+        timerJamRemaining: f.timerJamRemaining || 0,
       })),
       players: sim.players.map(p => ({
         name: p.name,

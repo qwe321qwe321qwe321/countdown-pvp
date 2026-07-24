@@ -73,6 +73,8 @@ const CONFIG = {
     gun1: 10,
     gun3: 10,
     gun5: 10,
+    shockgun: 7,
+    emp: 7,
     repair5: 8,
     repair10: 0,
     speedup: 10,
@@ -122,6 +124,11 @@ const CONFIG = {
   HitscanRandomSpreadMultiplier: 0.45,
   HitscanTrailDuration: 0.22,
   HitscanTrailMaxCount: 96,
+  ShockGunRayRadius: 16,                  // extra authoritative ray width; also drives its thicker pulse trail
+  ShockGunJamDurationDefault: 5,
+  ShockGunJamDurationMin: 0.5,
+  ShockGunJamDurationMax: 30,
+  ShockGunJamDurationStep: 0.5,
 
   // ---- Universal charged sling shot ----
   ChargedShotMinimumChargeTime: 1.0,        // release before this cancels; at this point the shot is one-third speed

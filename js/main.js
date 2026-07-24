@@ -547,9 +547,12 @@
     $("hostPlayerName").value = playerName();
     buildPoolChecks();
     buildTeamCountSelect();
+    configureShockGunDurationInput();
     syncModeChecks({
       publicSeconds: false, doubleBomb: false, roguelikeShop: false,
       wobblyHitscan: false,
+      shockGunJamDuration: CONFIG.ShockGunJamDurationDefault,
+      useEmpCard: false,
     });
   };
 
@@ -595,7 +598,17 @@
       doubleBomb: $("modeDoubleBomb").checked,
       roguelikeShop: $("modeRoguelikeShop").checked,
       wobblyHitscan: $("modeWobblyHitscan").checked,
+      shockGunJamDuration: Number($("shockGunJamDuration").value),
+      useEmpCard: $("modeEmpCard").checked,
     };
+  }
+
+  function configureShockGunDurationInput() {
+    const input = $("shockGunJamDuration");
+    input.min = String(CONFIG.ShockGunJamDurationMin);
+    input.max = String(CONFIG.ShockGunJamDurationMax);
+    input.step = String(CONFIG.ShockGunJamDurationStep);
+    input.value = String(CONFIG.ShockGunJamDurationDefault);
   }
 
   function syncModeChecks(modes) {
@@ -604,10 +617,16 @@
     $("modeDoubleBomb").checked = !!modes.doubleBomb;
     $("modeRoguelikeShop").checked = !!modes.roguelikeShop;
     $("modeWobblyHitscan").checked = !!modes.wobblyHitscan;
+    $("modeEmpCard").checked = !!modes.useEmpCard;
+    $("shockGunJamDuration").value = String(
+      modes.shockGunJamDuration == null
+        ? CONFIG.ShockGunJamDurationDefault
+        : modes.shockGunJamDuration);
   }
 
   for (const id of [
     "modePublicSeconds", "modeDoubleBomb", "modeRoguelikeShop", "modeWobblyHitscan",
+    "shockGunJamDuration", "modeEmpCard",
   ]) {
     $(id).onchange = () => {
       if (hostSession) hostSession.setModes(selectedModes());
@@ -677,7 +696,10 @@
         const labels = [
           teamCount > 1 ? `Team Mode: ${teamCount} Teams` : "Free-for-all",
         ];
-        if (modes.publicSeconds) labels.push("Public seconds");
+        if (modes.publicSeconds) {
+          const jamCard = modes.useEmpCard ? "E.M.P" : "Shock Gun";
+          labels.push(`Public seconds · ${jamCard} ${modes.shockGunJamDuration || CONFIG.ShockGunJamDurationDefault}s`);
+        }
         if (modes.doubleBomb) labels.push("Double bomb");
         if (modes.roguelikeShop) labels.push("Roguelike shop");
         if (modes.wobblyHitscan) labels.push("Wobbly hitscan");

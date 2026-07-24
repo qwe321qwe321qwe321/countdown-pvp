@@ -23,6 +23,8 @@ const Host = (() => {
     let modes = {
       publicSeconds: false, doubleBomb: false, roguelikeShop: false,
       wobblyHitscan: false,
+      shockGunJamDuration: C.ShockGunJamDurationDefault,
+      useEmpCard: false,
     };
     let started = false;
     let sim = null;
@@ -146,11 +148,20 @@ const Host = (() => {
 
     function setModes(nextModes) {
       if (started) return;
+      const requestedJamDuration = Number(nextModes && nextModes.shockGunJamDuration);
+      const clampedJamDuration = Number.isFinite(requestedJamDuration)
+        ? Math.max(C.ShockGunJamDurationMin,
+          Math.min(C.ShockGunJamDurationMax, requestedJamDuration))
+        : C.ShockGunJamDurationDefault;
       modes = {
         publicSeconds: !!(nextModes && nextModes.publicSeconds),
         doubleBomb: !!(nextModes && nextModes.doubleBomb),
         roguelikeShop: !!(nextModes && nextModes.roguelikeShop),
         wobblyHitscan: !!(nextModes && nextModes.wobblyHitscan),
+        shockGunJamDuration: Math.round(
+          clampedJamDuration / C.ShockGunJamDurationStep) *
+          C.ShockGunJamDurationStep,
+        useEmpCard: !!(nextModes && nextModes.useEmpCard),
       };
       lobbyChanged();
     }

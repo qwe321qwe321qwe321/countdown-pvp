@@ -287,7 +287,7 @@ const GameAudio = (() => {
     if (/is passing the bomb/.test(text)) return "throw";
     if (/received the bomb|starts with the bomb|bomb moved to/.test(text)) return "catch";
     if (/fired |launched a charged shot/.test(text)) return "shoot";
-    if (/SHIELD BLOCKED| SEC$|grappled the bomb/.test(text)) return "hit";
+    if (/SHIELD BLOCKED|DISPLAY JAMMED| SEC$|grappled the bomb/.test(text)) return "hit";
     if (/SHIELD ACTIVATED/.test(text)) return "shield";
     if (/LIGHTS OUT/.test(text)) return "blackout";
     if (/PASSING REVERSED|PASSING RESTORED/.test(text)) return "reverse";

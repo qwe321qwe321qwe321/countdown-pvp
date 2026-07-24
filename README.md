@@ -38,7 +38,12 @@ Each player opens with a Magnifying Glass and that opening pool's attack card.
 The host lobby also exposes four experimental switches:
 
 - **Public seconds** keeps every lethal/decoy timer visible and removes the
-  Magnifying Glass from starting hands and card rolls.
+  Magnifying Glass from starting hands and card rolls. This mode exclusively
+  adds the Electronic Shock Gun: its wide, stable hitscan pulse makes a real
+  or fake bomb display `###` for a host-tunable duration (5 seconds by
+  default) without changing its authoritative countdown. A lobby option
+  replaces the gun card with E.M.P, an instant-use card that jams every real
+  and fake bomb display for that same duration.
 - **Double bomb** starts each round with two simultaneous lethal bombs while
   at least four players remain. Both eliminations belong to the same round;
   new rounds return to one bomb once only one to three players remain.
@@ -104,7 +109,10 @@ the result with an opaque transfer id, so network round-trip latency cannot spoi
   instantaneous host-resolved rays with visible trails, aim wobble, and random
   spread; thrown tools and bombs still travel. The -5s gun is a three-round
   semi-auto, the -3s shotgun has one three-pellet shell, and the -1s machine
-  gun has a ten-round hold-to-fire magazine.
+  gun has a ten-round hold-to-fire magazine. The Public Seconds-only Electronic
+  Shock Gun is always a wide, stable hitscan pulse and jams either a real or
+  fake bomb's visible timer to `###` for the lobby-configured duration; its
+  optional E.M.P replacement applies that jam to all bombs immediately.
 - **Time rules**: reductions clamp at `MinimumBombTimeAfterReduction` (never explode from a
   hit; natural countdown to 0 still does); no upper limit on bomb time.
 - **Speed modifiers**: Speed Up ×2 / Slow Down ×0.5 override each other completely — no

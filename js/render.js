@@ -167,7 +167,9 @@ const Render = (() => {
       drawBombBody(ctx, f.x, f.y, snap.time);
       // Creator-only peek at the decoy's timer (only ever present in the
       // creator's own snapshot) — same look as the Magnifying Glass reveal.
-      if (f.privateRemaining != null) {
+      if (f.timerJammed) {
+        drawJammedTimer(ctx, f.x, f.y, snap.time);
+      } else if (f.privateRemaining != null) {
         ctx.font = "bold 17px monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
@@ -336,7 +338,8 @@ const Render = (() => {
     if (age > C.HitscanTrailDuration) return;
     const life = 1 - age / C.HitscanTrailDuration;
     const charged = trail.weapon === "charged";
-    const color = charged ? "210,130,255" : "255,92,76";
+    const shock = trail.weapon === "shockgun";
+    const color = shock ? "70,225,255" : charged ? "210,130,255" : "255,92,76";
 
     ctx.save();
     ctx.lineCap = "round";
@@ -344,8 +347,8 @@ const Render = (() => {
     ctx.beginPath();
     ctx.moveTo(trail.x0, trail.y0);
     ctx.lineTo(trail.x1, trail.y1);
-    ctx.lineWidth = 9 * life + 2;
-    ctx.strokeStyle = `rgba(${color},${0.16 * life})`;
+    ctx.lineWidth = (shock ? C.ShockGunRayRadius * 2 : 9) * life + (shock ? 8 : 2);
+    ctx.strokeStyle = `rgba(${color},${(shock ? 0.24 : 0.16) * life})`;
     ctx.shadowColor = `rgba(${color},${0.85 * life})`;
     ctx.shadowBlur = 18;
     ctx.stroke();
@@ -353,7 +356,7 @@ const Render = (() => {
     ctx.beginPath();
     ctx.moveTo(trail.x0, trail.y0);
     ctx.lineTo(trail.x1, trail.y1);
-    ctx.lineWidth = 2.2;
+    ctx.lineWidth = shock ? 5 : 2.2;
     ctx.strokeStyle = `rgba(255,245,225,${0.95 * life})`;
     ctx.stroke();
 
@@ -828,7 +831,9 @@ const Render = (() => {
       ctx.fillText("☠", b.x - 14, b.y - C.BombRadius - 6);
     }
     // Private Magnifying Glass reveal — only ever present in *your* snapshot.
-    if (snap.you && snap.you.reveal) {
+    if (b.timerJammed) {
+      drawJammedTimer(ctx, b.x, b.y, snap.time);
+    } else if (snap.you && snap.you.reveal) {
       ctx.font = "bold 17px monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -846,6 +851,19 @@ const Render = (() => {
       ctx.textBaseline = "alphabetic";
     }
     drawPotBadge(ctx, b.x, b.y, b.pot, snap.time);
+  }
+
+  function drawJammedTimer(ctx, x, y, time) {
+    const flicker = 0.78 + 0.22 * Math.sin(time * 37);
+    ctx.save();
+    ctx.font = "bold 19px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = `rgba(100,235,255,${flicker})`;
+    ctx.shadowColor = "#25dfff";
+    ctx.shadowBlur = 7;
+    ctx.fillText("###", x, y);
+    ctx.restore();
   }
 
   // Farmed-pot badge, shown on the bomb itself while it's being held — public
@@ -1480,11 +1498,11 @@ const Render = (() => {
       (d.teamCount > 1 ? `  teamCount=${d.teamCount} winningTeam=${d.winningTeam != null ? d.winningTeam + 1 : "-"}` : ""));
     lines.push(`bomb: remaining=${fmt(d.bombRemaining)} initial=${fmt(d.bombInitial)} holder=${d.holder ?? "-"}`);
     lines.push(`  pos=${d.bombPos ? d.bombPos.x + "," + d.bombPos.y : "-"} armOffset=${d.armOffset ? d.armOffset.x + "," + d.armOffset.y : "-"}`);
-    lines.push(`  speed=x${fmt(d.speedMult)} (${fmt(d.speedRemaining)}s left)  shield=${d.shieldActive} (${fmt(d.shieldRemaining)}s)  curse=${d.curseActive}`);
+    lines.push(`  speed=x${fmt(d.speedMult)} (${fmt(d.speedRemaining)}s left)  shield=${d.shieldActive} (${fmt(d.shieldRemaining)}s)  jam=${fmt(d.timerJamRemaining)}s  curse=${d.curseActive}`);
     lines.push(`  passLock=${fmt(d.passLockRemaining)}  nextReceiverMinHold=${fmt(d.nextReceiverMinHold)}`);
     lines.push(`order: ${d.passingOrder.join(" → ") || "-"}   next=${d.nextAlive ?? "-"}`);
     lines.push(`projectiles: ${d.projectiles.length ? d.projectiles.map(p => `${p.amount > 0 ? "+" : ""}${p.amount}s@${p.x},${p.y}`).join("  ") : "none"}`);
-    lines.push(`fakes: ${d.fakeBombs && d.fakeBombs.length ? d.fakeBombs.map(f => `${f.holder}${f.to ? "→" + f.to : ""} ${f.remaining.toFixed(1)}s`).join("  ") : "none"}`);
+    lines.push(`fakes: ${d.fakeBombs && d.fakeBombs.length ? d.fakeBombs.map(f => `${f.holder}${f.to ? "→" + f.to : ""} ${f.remaining.toFixed(1)}s jam=${f.timerJamRemaining.toFixed(1)}s`).join("  ") : "none"}`);
     for (const p of d.players) {
       const teamTag = d.teamCount > 1 ? `T${p.team + 1} ` : "";
       lines.push(`  ${teamTag}${p.name.padEnd(10)} ${p.state.padEnd(12)} coins=${String(p.coins).padEnd(4)} hand=[${p.hand.join(", ")}]`);

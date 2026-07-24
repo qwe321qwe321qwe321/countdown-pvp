@@ -448,6 +448,10 @@ const AI = (() => {
         choices.push(slot);
       } else if (def.kind === "blackout") {
         choices.push(slot);
+      } else if (def.kind === "emp" &&
+          (b.timerJamRemaining <= 0 ||
+            sim.fakeBombs.some(f => f.timerJamRemaining <= 0))) {
+        choices.push(slot);
       } else if (def.kind === "reverse" && reverseHelpsTeam(sim, player)) {
         choices.push(slot);
       } else if (def.kind === "reinforced" && player.armBuffRemaining <= 0 &&
@@ -501,6 +505,10 @@ const AI = (() => {
             isOpponent(sim, player, nextPassRecipient(sim, player)))) {
         choices.push({ slot, aimed: false });
       } else if (def.kind === "blackout") {
+        choices.push({ slot, aimed: false });
+      } else if (def.kind === "emp" &&
+          (b.timerJamRemaining <= 0 ||
+            sim.fakeBombs.some(f => f.timerJamRemaining <= 0))) {
         choices.push({ slot, aimed: false });
       } else if (def.kind === "reverse" && reverseHelpsTeam(sim, player)) {
         choices.push({ slot, aimed: false });

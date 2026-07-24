@@ -3,7 +3,7 @@
 // The initial card pool from the plan. Every special item is a card, obtained
 // only through Coins -> random draw, and every card is single-use.
 // kind: 'magnify' | 'projectile' | 'speed' | 'shield' | 'curse' | 'grapple' |
-//       'reinforced' | 'fakebomb' | 'blackout' | 'reverse'
+//       'reinforced' | 'fakebomb' | 'emp' | 'blackout' | 'reverse'
 const Cards = (() => {
   // `desc` feeds the in-game item codex panel; numbers are pulled from
   // CONFIG so the reference text can never drift from the actual rules.
@@ -19,6 +19,11 @@ const Cards = (() => {
     gun5:     { name: "-5s Gun",          emoji: "🔫", kind: "projectile", amount: -5, gunStyle: "semi",
       magazine: CONFIG.Gun5Magazine,
       desc: `${CONFIG.Gun5Magazine} semi-auto rounds with a short cooldown; each hit removes 5s.` },
+    shockgun: { name: "Electronic Shock Gun", emoji: "⚡", kind: "projectile", amount: 0,
+      gunStyle: "semi", magazine: 1, hitscanOnly: true,
+      desc: `Public Seconds only. Fire one wide, stable hitscan pulse; a real or fake bomb it hits displays ### for the lobby-tuned duration (default ${CONFIG.ShockGunJamDurationDefault}s).` },
+    emp:      { name: "E.M.P", emoji: "📡", kind: "emp",
+      desc: `Optional Public Seconds replacement for the Shock Gun. Activate instantly to make every real and fake bomb display ### for the lobby-tuned duration (default ${CONFIG.ShockGunJamDurationDefault}s).` },
     repair5:  { name: "+3s Repair Kit",   emoji: "🧰", kind: "projectile", amount: +3,
       desc: "One throw; hitting the bomb adds 3s to its timer." },
     repair10: { name: "+10s Repair Kit",  emoji: "🛠️", kind: "projectile", amount: +10,
@@ -50,7 +55,7 @@ const Cards = (() => {
   // Zero-weight cards stay disabled even if they appear in a category below,
   // so CONFIG remains the switch that controls which variants are in use.
   const ROUND_ATTACK_IDS = [
-    "gun1", "gun3", "gun5", "speedup", "reinforced", "grapple", "fakebomb", "blackout",
+    "gun1", "gun3", "gun5", "shockgun", "emp", "speedup", "reinforced", "grapple", "fakebomb", "blackout",
   ];
   const ROUND_DEFENSE_IDS = ["slowdown", "repair5", "shield", "reverse"];
 
