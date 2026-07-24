@@ -686,13 +686,14 @@ const Render = (() => {
       const me = snap.players.find(p => p.id === you.id);
       const coinScale = snap.seatCount / C.CoinEconomyBaselinePlayers;
       const baseRate = C.PassiveCoinAmount / (C.PassiveCoinInterval * coinScale);
-      const bonusRate = C.BombHolderCoinAmount / (C.BombHolderCoinInterval * coinScale);
       // Farming the bomb replaces passive income, it doesn't stack on top —
-      // matches Sim.step's coin logic.
+      // matches Sim.step's coin logic. The pot itself grows (shown on the
+      // bomb badge instead), but it isn't yours until you throw it, so your
+      // own rate reads 0 the whole time you're holding.
       let rate = baseRate, rateColor = "#9aa1ad";
       if (me && me.earningPenalty) { rate = 0; rateColor = "#ff5d5d"; }
-      else if (me && me.earningBonus) { rate = bonusRate; rateColor = "#5dff8a"; }
-      const rateText = `(+${rate.toFixed(1)}/s)`;
+      else if (me && me.earningBonus) { rate = 0; rateColor = "#ffd54c"; }
+      const rateText = `(+${Number.isInteger(rate) ? rate : rate.toFixed(1)}/s)`;
       dom.coinDisplay.innerHTML = `<span class="coin-icon">💰</span>${you.coins}` +
         ` <span style="font-size:14px;color:${rateColor}">${rateText}</span>`;
       dom.statusLine.textContent = `Alive: ${snap.aliveCount}/${snap.players.length}` +

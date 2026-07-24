@@ -41,7 +41,9 @@ const CONFIG = {
   StartingCoins: 0,
   PassiveCoinInterval: 1,               // natural growth: 1 coin/s at the 3-player baseline
   PassiveCoinAmount: 1,
-  BombHolderCoinInterval: 1.0,            // holder bonus stacks on top of passive income: +1 coin/s while holding = 2/s total, at baseline
+  // Farming the bomb (pot accrual, cashed out on throw) runs at 2x the
+  // passive rate — half the interval, same amount per tick.
+  BombHolderCoinInterval: 0.5,
   BombHolderCoinAmount: 1,
   BombHolderCoinDuration: 10.0,           // grace window per hold; past it the holder earns nothing at all (stalling penalty)
 
