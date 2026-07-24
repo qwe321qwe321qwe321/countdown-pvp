@@ -165,6 +165,8 @@ const Sim = (() => {
         equippedSlot: null,      // hand slot the player is currently aiming (cosmetic, public)
         gunPending: null,        // multi-click gun card mid-use: { cardId, slot, shotsLeft }
         armBuffRemaining: 0,     // Reinforced Arm: free-target + 2x pass speed while > 0
+        lastPayoutAmount: 0,     // most recent farmed-pot cash-in, for the private "+N" cue
+        lastPayoutSeq: 0,        // bumped every cash-in so the client can detect a new one even if the amount repeats
       })),
       bomb: null,
       // Fake Bomb decoys. Each entry is a full bomb entity — held in the
@@ -260,6 +262,8 @@ const Sim = (() => {
       p.revealRemaining = 0;
       p.gunPending = null;
       p.armBuffRemaining = 0;
+      p.lastPayoutAmount = 0;
+      p.lastPayoutSeq = 0;
     }
     sim.winnerId = null;
     spawnBomb(sim);
@@ -898,23 +902,26 @@ const Sim = (() => {
       const heldBomb = (p === holder && !b.transfer) ? b : fakeHeldBy(sim, p.id);
       const holding = !!heldBomb;
       const stalling = holding && p.holdElapsed >= C.BombHolderCoinDuration;
-      p.passiveAcc += dt;
-      if (stalling) {
+      if (holding) {
+        // Farming the bomb replaces passive income entirely, not stacks on
+        // top of it — no natural growth while holding, only the pot.
         p.passiveAcc = 0;
-        p.holderAcc = 0;
-      } else {
-        const passiveInterval = C.PassiveCoinInterval * coinScale;
-        while (p.passiveAcc >= passiveInterval) {
-          p.passiveAcc -= passiveInterval;
-          p.coins += C.PassiveCoinAmount;
-        }
-        if (holding) {
+        if (stalling) {
+          p.holderAcc = 0;
+        } else {
           p.holderAcc += dt;
           const holderInterval = C.BombHolderCoinInterval * coinScale;
           while (p.holderAcc >= holderInterval) {
             p.holderAcc -= holderInterval;
             heldBomb.pot += C.BombHolderCoinAmount;
           }
+        }
+      } else {
+        p.passiveAcc += dt;
+        const passiveInterval = C.PassiveCoinInterval * coinScale;
+        while (p.passiveAcc >= passiveInterval) {
+          p.passiveAcc -= passiveInterval;
+          p.coins += C.PassiveCoinAmount;
         }
       }
       if (holding) p.holdElapsed += dt;
@@ -997,9 +1004,15 @@ const Sim = (() => {
         };
         // Cash in the farming pot at the moment of release. The real bomb pays
         // its pot to the thrower; a fake had the identical buildup and
-        // animation but its release cashes out nothing. Deliberately silent —
-        // announcing the payout would reveal which bomb was the decoy.
-        if (bombLike === sim.bomb) p.coins += bombLike.pot;
+        // animation but its release cashes out nothing. The public event log
+        // stays silent about it — announcing the payout would reveal which
+        // bomb was the decoy — but the thrower gets a private "+N" cue
+        // (see the `you.payout` snapshot field) visible only to themselves.
+        if (bombLike === sim.bomb && bombLike.pot > 0) {
+          p.coins += bombLike.pot;
+          p.lastPayoutAmount = bombLike.pot;
+          p.lastPayoutSeq += 1;
+        }
         bombLike.pot = 0;
         addEvent(sim, `${p.name} is passing the bomb to ${next.name}...`);
       }
@@ -1213,6 +1226,11 @@ const Sim = (() => {
             (!viewer.alive || (viewer.revealRemaining > 0 && magnifyCoversPos(sim, viewer, bombPos))))
           ? { remaining: viewer.revealRemaining, bombTime: b.remaining }
           : null,
+        // Private farmed-pot cash-in cue: bumps `seq` every payout so the
+        // client can pop a one-shot "+N" even if the amount repeats. Never
+        // sent to anyone but the thrower — showing it publicly would out a
+        // decoy the instant its (nonexistent) payout failed to appear.
+        payout: { amount: viewer.lastPayoutAmount, seq: viewer.lastPayoutSeq },
       } : null,
       projectiles: sim.projectiles.map(pr => ({
         x: pr.x, y: pr.y, amount: pr.amount, isClaw: !!pr.isClaw,

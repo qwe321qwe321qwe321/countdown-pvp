@@ -7,6 +7,15 @@ const Render = (() => {
   const C = CONFIG;
   const SEAT_COLORS = ["#e6604c", "#4c9be6", "#5cc46a", "#e6c14c", "#b06ce6", "#e68b4c", "#4ce6d4", "#e64ca8"];
   const FLOAT_LIFETIME = 1.6; // seconds a positioned event floats on screen
+  const PAYOUT_FLOAT_LIFETIME = 1.3; // seconds the private "+N" cash-in cue floats
+
+  // Tracks the last farmed-pot payout this client has already shown, so a
+  // new one (bumped `seq`) triggers exactly one float — module state because
+  // it's driven by snap.time deltas across frames, same pattern as the DOM
+  // hand/event caches below.
+  let lastPayoutSeq = 0;
+  let payoutFloatStart = null;
+  let payoutFloatAmount = 0;
 
   // ---- Canvas --------------------------------------------------------------
 
@@ -181,6 +190,38 @@ const Render = (() => {
       ctx.textAlign = "center";
       ctx.fillStyle = `rgba(255,220,120,${1 - k})`;
       ctx.fillText(ev.text, ev.x, ev.y - 24 - k * 36);
+    }
+
+    // Private "+N" cash-in cue: only ever present in *your* snapshot, so
+    // nobody else's screen shows when a pot gets paid out (that would out a
+    // decoy the instant its payout failed to appear).
+    if (snap.you && snap.you.payout && snap.you.payout.seq > lastPayoutSeq) {
+      lastPayoutSeq = snap.you.payout.seq;
+      payoutFloatStart = snap.time;
+      payoutFloatAmount = snap.you.payout.amount;
+    }
+    if (payoutFloatStart != null) {
+      const age = snap.time - payoutFloatStart;
+      if (age <= PAYOUT_FLOAT_LIFETIME) {
+        const me = snap.players.find(p => p.id === myId);
+        if (me) {
+          const k = age / PAYOUT_FLOAT_LIFETIME;
+          const scale = 1 + (1 - k) * 0.3;
+          ctx.save();
+          ctx.font = `bold ${Math.round(30 * scale)}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.fillStyle = `rgba(255,213,76,${1 - k})`;
+          ctx.strokeStyle = `rgba(0,0,0,${0.55 * (1 - k)})`;
+          ctx.lineWidth = 4;
+          const fx = me.x, fy = me.y - C.PlayerBodyRadius - 30 - k * 46;
+          const text = `+${payoutFloatAmount} 💰`;
+          ctx.strokeText(text, fx, fy);
+          ctx.fillText(text, fx, fy);
+          ctx.restore();
+        }
+      } else {
+        payoutFloatStart = null;
+      }
     }
 
     drawOverlays(ctx, snap);
@@ -616,11 +657,14 @@ const Render = (() => {
 
     if (you) {
       const me = snap.players.find(p => p.id === you.id);
-      const baseRate = C.PassiveCoinAmount / C.PassiveCoinInterval;
-      const bonusRate = C.BombHolderCoinAmount / C.BombHolderCoinInterval;
+      const coinScale = snap.seatCount / C.CoinEconomyBaselinePlayers;
+      const baseRate = C.PassiveCoinAmount / (C.PassiveCoinInterval * coinScale);
+      const bonusRate = C.BombHolderCoinAmount / (C.BombHolderCoinInterval * coinScale);
+      // Farming the bomb replaces passive income, it doesn't stack on top —
+      // matches Sim.step's coin logic.
       let rate = baseRate, rateColor = "#9aa1ad";
       if (me && me.earningPenalty) { rate = 0; rateColor = "#ff5d5d"; }
-      else if (me && me.earningBonus) { rate = baseRate + bonusRate; rateColor = "#5dff8a"; }
+      else if (me && me.earningBonus) { rate = bonusRate; rateColor = "#5dff8a"; }
       const rateText = `(+${rate.toFixed(1)}/s)`;
       dom.coinDisplay.innerHTML = `<span class="coin-icon">💰</span>${you.coins}` +
         ` <span style="font-size:14px;color:${rateColor}">${rateText}</span>`;
@@ -763,6 +807,8 @@ const Render = (() => {
   function resetDomCache() {
     lastHandSig = null;
     lastEventSeq = 0;
+    lastPayoutSeq = 0;
+    payoutFloatStart = null;
   }
 
   return { draw, updateDom, resetDomCache };
