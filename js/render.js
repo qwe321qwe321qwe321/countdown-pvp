@@ -200,10 +200,17 @@ const Render = (() => {
     // Private "+N" cash-in cue: only ever present in *your* snapshot, so
     // nobody else's screen shows when a pot gets paid out (that would out a
     // decoy the instant its payout failed to appear).
-    if (snap.you && snap.you.payout && snap.you.payout.seq > lastPayoutSeq) {
+    // Fire on any *change* of seq, not just a higher value: a rematch resets
+    // the server-side seq back to 0, so a `>` test would swallow the first few
+    // payouts of the new match (their seq 1,2,3… never exceed the stale module
+    // value carried over from the previous match). seq 0 is the "no payout yet"
+    // sentinel and never pops the cue.
+    if (snap.you && snap.you.payout && snap.you.payout.seq !== lastPayoutSeq) {
       lastPayoutSeq = snap.you.payout.seq;
-      payoutFloatStart = snap.time;
-      payoutFloatAmount = snap.you.payout.amount;
+      if (snap.you.payout.seq > 0) {
+        payoutFloatStart = snap.time;
+        payoutFloatAmount = snap.you.payout.amount;
+      }
     }
     if (payoutFloatStart != null) {
       const age = snap.time - payoutFloatStart;

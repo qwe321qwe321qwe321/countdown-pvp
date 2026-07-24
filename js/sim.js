@@ -748,15 +748,13 @@ const Sim = (() => {
         if (b.shieldRemaining > 0) {
           // Shield: projectile still vanishes, but no time effect.
           addEvent(sim, "SHIELD BLOCKED IT", bombPos.x, bombPos.y);
-        } else if (b.speedMult === 0 && b.speedRemaining > 0) {
-          // Frozen (Freeze Stopwatch): the bomb is invincible while time is
-          // stopped — hits still vanish the projectile but never touch time.
-          addEvent(sim, "FROZEN — NO EFFECT", bombPos.x, bombPos.y);
         } else if (pr.isClaw) {
           // Latches on and reels the bomb straight to the claw owner. Reuses
           // the same b.transfer the explosion/other-claw/shot logic already
           // understands, so the bomb stays explodable/shootable/stealable
           // for the whole retract, whether it was static or already mid-pass.
+          // A grapple works even on a frozen bomb: Freeze protects the *timer*
+          // from being changed, not the bomb's position from being reeled in.
           const owner = getPlayer(sim, pr.ownerId);
           if (owner && owner.alive) {
             const claimerSeat = seatPosition(owner.seat, sim.seatCount);
@@ -772,6 +770,11 @@ const Sim = (() => {
             };
             addEvent(sim, `${owner.name} grappled the bomb!`, bombPos.x, bombPos.y);
           }
+        } else if (b.speedMult === 0 && b.speedRemaining > 0) {
+          // Frozen (Freeze Stopwatch): the bomb's timer is invincible while
+          // stopped — time hits still vanish but never touch it. (A grapple is
+          // handled above and is deliberately exempt: it only moves the bomb.)
+          addEvent(sim, "FROZEN — NO EFFECT", bombPos.x, bombPos.y);
         } else if (pr.amount < 0) {
           // No floor: a gun hit can bring the bomb straight to 0 and detonate it.
           b.remaining += pr.amount;
@@ -817,16 +820,9 @@ const Sim = (() => {
       }
       if (hitFake) continue;
 
-      // Player bodies block projectiles (no damage, no effect) — positioning
-      // the bomb behind your own body is a real defensive option.
-      let blocked = false;
-      for (const p of sim.players) {
-        if (!p.alive) continue;
-        const seat = seatPosition(p.seat, sim.seatCount);
-        if (dist(pr, seat) <= C.PlayerBodyRadius + C.ProjectileRadius) { blocked = true; break; }
-      }
-      if (blocked) continue;
-
+      // Player bodies are not colliders: projectiles pass straight through
+      // them (only the bomb, fakes, and the walls stop a shot). A player can no
+      // longer shield the bomb by standing their own body in the line of fire.
       survivors.push(pr);
     }
     sim.projectiles = survivors;
