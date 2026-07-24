@@ -210,12 +210,21 @@ const Sim = (() => {
       ? Math.max(C.ShockGunJamDurationMin,
         Math.min(C.ShockGunJamDurationMax, requestedJamDuration))
       : C.ShockGunJamDurationDefault;
+    const requestedRerollCost = Number(
+      requestedModes && requestedModes.roguelikeRerollRefreshCost);
+    const clampedRerollCost = Number.isFinite(requestedRerollCost)
+      ? Math.max(C.RoguelikeRerollRefreshCostMin,
+        Math.min(C.RoguelikeRerollRefreshCostMax, requestedRerollCost))
+      : C.RoguelikeRerollRefreshCost;
     const modes = {
       publicSeconds: !!(requestedModes && requestedModes.publicSeconds),
       doubleBomb: !!(requestedModes && requestedModes.doubleBomb),
       roguelikeShop: !!(requestedModes && requestedModes.roguelikeShop),
       roguelikeRerollRefresh: !!(requestedModes && requestedModes.roguelikeShop &&
         requestedModes.roguelikeRerollRefresh),
+      roguelikeRerollRefreshCost: Math.round(
+        clampedRerollCost / C.RoguelikeRerollRefreshCostStep) *
+        C.RoguelikeRerollRefreshCostStep,
       wobblyHitscan: !!(requestedModes && requestedModes.wobblyHitscan),
       nonRefillingBombPot: !!(requestedModes && requestedModes.nonRefillingBombPot),
       shockGunJamDuration: Math.round(
@@ -961,7 +970,7 @@ const Sim = (() => {
 
   function rerollShop(sim, p) {
     const cost = sim.modes.roguelikeRerollRefresh
-      ? C.RoguelikeRerollRefreshCost
+      ? sim.modes.roguelikeRerollRefreshCost
       : C.ShopRerollCost;
     if (!sim.modes.roguelikeShop || !p.alive || p.coins < cost) return;
     p.coins -= cost;

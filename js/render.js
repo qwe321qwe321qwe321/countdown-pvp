@@ -1275,7 +1275,7 @@ const Render = (() => {
     const roundIds = snap.roundCardPool || [];
     const shopMode = !!(snap.modes && snap.modes.roguelikeShop);
     const rerollCost = snap.modes && snap.modes.roguelikeRerollRefresh
-      ? C.RoguelikeRerollRefreshCost
+      ? snap.modes.roguelikeRerollRefreshCost
       : C.ShopRerollCost;
     const codexSig = JSON.stringify([snap.roundNumber, roundIds, shopMode]);
     if (dom.cardCodex && codexSig !== lastCodexSig) {
@@ -1479,7 +1479,7 @@ const Render = (() => {
       const shopMode = !!(snap.modes && snap.modes.roguelikeShop);
       if (kind === "reroll") {
         const cost = snap.modes && snap.modes.roguelikeRerollRefresh
-          ? C.RoguelikeRerollRefreshCost
+          ? snap.modes.roguelikeRerollRefreshCost
           : C.ShopRerollCost;
         return shopMode && you.alive && you.coins >= cost;
       }

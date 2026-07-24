@@ -53,8 +53,9 @@ The host lobby also exposes several experimental switches:
   from every enabled card rather than the round Shop Pool. Magnifying Glass
   uses a mode-specific 2× draw weight. Its optional **Free choices; only
   reroll costs coins** rule makes slots 1–3 free and leaves consumed slots
-  empty across rounds; pressing slot 4 costs 10 coins, discards every
-  remaining choice, and rolls a fresh set of three.
+  empty across rounds; pressing slot 4 pays a lobby-configurable price
+  (15 coins by default), discards every remaining choice, and rolls a fresh
+  set of three.
 - **Wobbly hitscan weapons** makes firearm rounds and the universal charged
   shot resolve instantly. Their original firing cycle controls sight wobble
   (slower weapons wander farther), and every ray receives additional random

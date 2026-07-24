@@ -386,7 +386,7 @@
     if (!def) return;
     const shopMode = !!(latestSnap.modes && latestSnap.modes.roguelikeShop);
     const rerollCost = latestSnap.modes && latestSnap.modes.roguelikeRerollRefresh
-      ? CONFIG.RoguelikeRerollRefreshCost
+      ? latestSnap.modes.roguelikeRerollRefreshCost
       : CONFIG.ShopRerollCost;
     const freeChoice = shopMode && latestSnap.modes.roguelikeRerollRefresh &&
       def.kind !== "reroll";
@@ -554,9 +554,11 @@
     buildPoolChecks();
     buildTeamCountSelect();
     configureShockGunDurationInput();
+    configureRoguelikeRerollCostInput();
     syncModeChecks({
       publicSeconds: false, doubleBomb: false, roguelikeShop: false,
       roguelikeRerollRefresh: false,
+      roguelikeRerollRefreshCost: CONFIG.RoguelikeRerollRefreshCost,
       wobblyHitscan: false, nonRefillingBombPot: false,
       shockGunJamDuration: CONFIG.ShockGunJamDurationDefault,
       useEmpCard: false,
@@ -605,6 +607,7 @@
       doubleBomb: $("modeDoubleBomb").checked,
       roguelikeShop: $("modeRoguelikeShop").checked,
       roguelikeRerollRefresh: $("modeRoguelikeRerollRefresh").checked,
+      roguelikeRerollRefreshCost: Number($("roguelikeRerollRefreshCost").value),
       wobblyHitscan: $("modeWobblyHitscan").checked,
       nonRefillingBombPot: $("modeNonRefillingBombPot").checked,
       shockGunJamDuration: Number($("shockGunJamDuration").value),
@@ -620,6 +623,14 @@
     input.value = String(CONFIG.ShockGunJamDurationDefault);
   }
 
+  function configureRoguelikeRerollCostInput() {
+    const input = $("roguelikeRerollRefreshCost");
+    input.min = String(CONFIG.RoguelikeRerollRefreshCostMin);
+    input.max = String(CONFIG.RoguelikeRerollRefreshCostMax);
+    input.step = String(CONFIG.RoguelikeRerollRefreshCostStep);
+    input.value = String(CONFIG.RoguelikeRerollRefreshCost);
+  }
+
   function syncModeChecks(modes) {
     if (!modes) return;
     $("modePublicSeconds").checked = !!modes.publicSeconds;
@@ -628,6 +639,12 @@
     $("modeRoguelikeRerollRefresh").checked =
       !!(modes.roguelikeShop && modes.roguelikeRerollRefresh);
     $("modeRoguelikeRerollRefresh").disabled = !modes.roguelikeShop;
+    $("roguelikeRerollRefreshCost").disabled =
+      !(modes.roguelikeShop && modes.roguelikeRerollRefresh);
+    $("roguelikeRerollRefreshCost").value = String(
+      modes.roguelikeRerollRefreshCost == null
+        ? CONFIG.RoguelikeRerollRefreshCost
+        : modes.roguelikeRerollRefreshCost);
     $("modeWobblyHitscan").checked = !!modes.wobblyHitscan;
     $("modeNonRefillingBombPot").checked = !!modes.nonRefillingBombPot;
     $("modeEmpCard").checked = !!modes.useEmpCard;
@@ -639,7 +656,7 @@
 
   for (const id of [
     "modePublicSeconds", "modeDoubleBomb", "modeRoguelikeShop",
-    "modeRoguelikeRerollRefresh", "modeWobblyHitscan",
+    "modeRoguelikeRerollRefresh", "roguelikeRerollRefreshCost", "modeWobblyHitscan",
     "modeNonRefillingBombPot", "shockGunJamDuration", "modeEmpCard",
   ]) {
     $(id).onchange = () => {
@@ -717,7 +734,7 @@
         if (modes.doubleBomb) labels.push("Double bomb");
         if (modes.roguelikeShop) {
           labels.push(modes.roguelikeRerollRefresh
-            ? "Roguelike shop · reroll-only refresh"
+            ? `Roguelike shop · free choices · reroll ${modes.roguelikeRerollRefreshCost}c`
             : "Roguelike shop");
         }
         if (modes.wobblyHitscan) labels.push("Wobbly hitscan");

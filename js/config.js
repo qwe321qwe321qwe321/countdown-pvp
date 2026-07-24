@@ -60,7 +60,10 @@ const CONFIG = {
   // ---- Cards ----
   CardDrawCost: 5,
   ShopRerollCost: 2,
-  RoguelikeRerollRefreshCost: 10,
+  RoguelikeRerollRefreshCost: 15,
+  RoguelikeRerollRefreshCostMin: 1,
+  RoguelikeRerollRefreshCostMax: 100,
+  RoguelikeRerollRefreshCostStep: 1,
   RoguelikeChoiceCount: 3,
   RoguelikeMagnifyWeightMultiplier: 2.0,  // make information tools notably more common in the full-pool shop
   MaxHandSize: 5,

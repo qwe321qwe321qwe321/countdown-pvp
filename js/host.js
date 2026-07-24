@@ -23,6 +23,7 @@ const Host = (() => {
     let modes = {
       publicSeconds: false, doubleBomb: false, roguelikeShop: false,
       roguelikeRerollRefresh: false,
+      roguelikeRerollRefreshCost: C.RoguelikeRerollRefreshCost,
       wobblyHitscan: false, nonRefillingBombPot: false,
       shockGunJamDuration: C.ShockGunJamDurationDefault,
       useEmpCard: false,
@@ -154,12 +155,21 @@ const Host = (() => {
         ? Math.max(C.ShockGunJamDurationMin,
           Math.min(C.ShockGunJamDurationMax, requestedJamDuration))
         : C.ShockGunJamDurationDefault;
+      const requestedRerollCost = Number(
+        nextModes && nextModes.roguelikeRerollRefreshCost);
+      const clampedRerollCost = Number.isFinite(requestedRerollCost)
+        ? Math.max(C.RoguelikeRerollRefreshCostMin,
+          Math.min(C.RoguelikeRerollRefreshCostMax, requestedRerollCost))
+        : C.RoguelikeRerollRefreshCost;
       modes = {
         publicSeconds: !!(nextModes && nextModes.publicSeconds),
         doubleBomb: !!(nextModes && nextModes.doubleBomb),
         roguelikeShop: !!(nextModes && nextModes.roguelikeShop),
         roguelikeRerollRefresh: !!(nextModes && nextModes.roguelikeShop &&
           nextModes.roguelikeRerollRefresh),
+        roguelikeRerollRefreshCost: Math.round(
+          clampedRerollCost / C.RoguelikeRerollRefreshCostStep) *
+          C.RoguelikeRerollRefreshCostStep,
         wobblyHitscan: !!(nextModes && nextModes.wobblyHitscan),
         nonRefillingBombPot: !!(nextModes && nextModes.nonRefillingBombPot),
         shockGunJamDuration: Math.round(
