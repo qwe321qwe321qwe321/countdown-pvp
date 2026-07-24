@@ -65,6 +65,35 @@ const Sim = (() => {
     return { x: seat.x + b.offset.x, y: seat.y + b.offset.y };
   }
 
+  // Same position rule for a fake bomb entity: lerp along its transfer while
+  // in flight, otherwise holder seat + arm-controlled offset.
+  function fakeWorldPos(sim, f) {
+    if (f.transfer) {
+      const t = Math.min(1, f.transfer.elapsed / f.transfer.duration);
+      return {
+        x: f.transfer.fromPos.x + (f.transfer.toPos.x - f.transfer.fromPos.x) * t,
+        y: f.transfer.fromPos.y + (f.transfer.toPos.y - f.transfer.fromPos.y) * t,
+      };
+    }
+    const holder = getPlayer(sim, f.holderId);
+    if (!holder) return { x: CENTER.x, y: CENTER.y };
+    const seat = seatPosition(holder.seat, sim.seatCount);
+    return { x: seat.x + f.offset.x, y: seat.y + f.offset.y };
+  }
+
+  // Fake bomb physically in this player's hands right now (not mid-flight).
+  function fakeHeldBy(sim, playerId) {
+    return sim.fakeBombs.find(f => f.holderId === playerId && !f.transfer) || null;
+  }
+
+  // "Hands full" test used everywhere a rule cares about holding *a* bomb —
+  // real or fake must behave identically or the decoy gives itself away.
+  function holdsAnyBomb(sim, p) {
+    const b = sim.bomb;
+    if (b && b.holderId === p.id && !b.transfer) return true;
+    return !!fakeHeldBy(sim, p.id);
+  }
+
   // ---- Events (public gameplay feedback) -----------------------------------
 
   // x/y are optional: events with a position also render as floating text.
@@ -72,6 +101,15 @@ const Sim = (() => {
     sim.eventSeq++;
     sim.events.push({ seq: sim.eventSeq, text, x, y, time: sim.time });
     if (sim.events.length > 40) sim.events.shift();
+  }
+
+  // Positioned visual-only effect (currently just "fakeboom": a fake bomb's
+  // harmless explosion). Renderers key off type + age; `data` carries extra
+  // presentation hints (e.g. midAir for the staged blast sequence).
+  function addEffect(sim, type, x, y, data) {
+    sim.effectSeq++;
+    sim.effects.push(Object.assign({ seq: sim.effectSeq, type, x, y, time: sim.time }, data || {}));
+    if (sim.effects.length > 12) sim.effects.shift();
   }
 
   // ---- Match / bomb lifecycle ----------------------------------------------
@@ -113,21 +151,37 @@ const Sim = (() => {
         passLock: 0,
         passiveAcc: 0,
         holderAcc: 0,
-        holdElapsed: 0,          // time since this hold started; gates the holder bonus window
+        holdElapsed: 0,          // time since this hold started; gates the holder income window
         revealRemaining: 0,     // magnifying glass private reveal
         aim: { x: CENTER.x, y: CENTER.y },
         equippedSlot: null,      // hand slot the player is currently aiming (cosmetic, public)
         gunPending: null,        // multi-click gun card mid-use: { cardId, slot, shotsLeft }
+        armBuffRemaining: 0,     // Reinforced Arm: free-target + 2x pass speed while > 0
       })),
       bomb: null,
+      // Fake Bomb decoys. Each entry is a full bomb entity — held in the
+      // holder's arms, passed/bounced/grappled/shot exactly like sim.bomb —
+      // that simply pops harmlessly when its own hidden timer runs out:
+      // { id, remaining, holderId, offset:{x,y}, transfer|null }.
+      // holderId keeps the sender during a pass transfer, mirroring how
+      // sim.bomb.holderId works, so the two are indistinguishable in play.
+      fakeBombs: [],
+      nextFakeId: 1,
       projectiles: [],
       nextProjId: 1,
       events: [],
       eventSeq: 0,
+      // Positioned, purely-visual one-shot effects (e.g. a fake bomb's
+      // harmless pop) — same append/trim pattern as events.
+      effects: [],
+      effectSeq: 0,
       phase: "reveal",          // reveal -> countdown -> playing -> exploding -> (reveal | matchover)
       phaseTimer: 0,
       playElapsed: 0,           // real seconds since "playing" started this bomb (for the public reveal window)
       explosionAt: null,
+      explosionVictimPos: null,
+      explosionVictimId: null,
+      explosionMidAir: false,   // detonated while flying between seats -> render the staged blast sequence
       winnerId: null,
       time: 0,
     };
@@ -162,7 +216,12 @@ const Sim = (() => {
         : null,
     };
     sim.projectiles = [];
+    sim.fakeBombs = [];
+    sim.effects = [];
     sim.explosionAt = null;
+    sim.explosionVictimPos = null;
+    sim.explosionVictimId = null;
+    sim.explosionMidAir = false;
     sim.playElapsed = 0;
     for (const p of sim.players) {
       p.passLock = 0;
@@ -171,6 +230,7 @@ const Sim = (() => {
       p.holderAcc = 0;
       p.holdElapsed = 0;
       p.gunPending = null;
+      p.armBuffRemaining = 0;
     }
     sim.phase = "reveal";
     sim.phaseTimer = C.InitialTimeRevealDuration;
@@ -190,6 +250,7 @@ const Sim = (() => {
       p.holdElapsed = 0;
       p.revealRemaining = 0;
       p.gunPending = null;
+      p.armBuffRemaining = 0;
     }
     sim.winnerId = null;
     spawnBomb(sim);
@@ -202,6 +263,19 @@ const Sim = (() => {
       if (p && p.alive) return p;
     }
     return null;
+  }
+
+  // Reinforced Arm free-target passing: whichever other alive player's seat
+  // is nearest to the live aim point, i.e. "aim at someone and press SPACE".
+  function nearestAliveTo(sim, point, excludeId) {
+    let best = null, bestDist = Infinity;
+    for (const p of sim.players) {
+      if (!p.alive || p.id === excludeId) continue;
+      const seat = seatPosition(p.seat, sim.seatCount);
+      const d = dist(point, seat);
+      if (d < bestDist) { bestDist = d; best = p; }
+    }
+    return best;
   }
 
   // Ownership transfer. Curse waits on the bomb and punishes the *receiver*
@@ -237,10 +311,35 @@ const Sim = (() => {
       if (receiver && receiver.alive) {
         giveBomb(sim, receiver);
         addEvent(sim, initial ? `${receiver.name} starts with the bomb!` : `${receiver.name} received the bomb`);
+        bounceRealIfOccupied(sim, receiver);
       } else if (sender && sender.alive) {
-        giveBomb(sim, sender); // receiver vanished mid-pass: bomb stays home
+        // Receiver vanished mid-pass: bomb returns home — but the sender may
+        // have pulled out a fake while their throw was in flight, in which
+        // case the returning real bomb hot-potatoes onward as usual.
+        giveBomb(sim, sender);
+        bounceRealIfOccupied(sim, sender);
       }
     }
+  }
+
+  // Hot-potato rule: nobody can hold two bombs (real or fake) at once — the
+  // bomb that just *arrived* is the one that bounces straight onward to the
+  // next alive seat (with a normal travel animation), while whatever the
+  // receiver already had stays put. This is the real-bomb half; the fake
+  // half lives in stepFakeBombs' arrival handling.
+  function bounceRealIfOccupied(sim, receiver) {
+    if (!fakeHeldBy(sim, receiver.id)) return;
+    const next = nextAliveFrom(sim, receiver.seat);
+    if (!next || next === receiver) return;
+    const fromPos = seatPosition(receiver.seat, sim.seatCount);
+    const toPos = seatPosition(next.seat, sim.seatCount);
+    sim.bomb.transfer = {
+      fromId: receiver.id, toId: next.id, elapsed: 0,
+      duration: Math.max(0.001, dist(fromPos, toPos) / C.BombPassSpeed),
+      fromPos, toPos,
+    };
+    receiver.passLock = Math.max(receiver.passLock, C.FakeBombForcedPassLock);
+    addEvent(sim, `${receiver.name} was already holding a bomb — bounced it to ${next.name}!`);
   }
 
   function checkWin(sim) {
@@ -262,22 +361,40 @@ const Sim = (() => {
     player.revealRemaining = 0;
     player.gunPending = null;
     player.equippedSlot = null;
+    player.armBuffRemaining = 0;
+    // A decoy in a dead player's hands vanishes with them; one they already
+    // passed away is mid-flight and settles on arrival as usual.
+    sim.fakeBombs = sim.fakeBombs.filter(f => f.transfer || f.holderId !== player.id);
   }
 
-  // Who dies when the bomb reaches 0: normally the current holder, but while
-  // a pass transfer is in flight the victim depends on how far the bomb had
-  // traveled — before the halfway point the sender was still holding it, at
-  // or past halfway the receiver already had it.
+  // Who dies when the bomb reaches 0: normally the current holder (they are
+  // by construction the nearest point to the bomb, since it sits in their
+  // arm-controlled offset). But while a pass transfer is in flight, the bomb
+  // is out in open space and the victim is whichever alive player is
+  // physically nearest to it right now — not necessarily whoever it was
+  // headed toward.
   function explode(sim) {
     const b = sim.bomb;
     let victim;
     if (b.transfer) {
-      const frac = b.transfer.elapsed / b.transfer.duration;
-      victim = getPlayer(sim, frac < 0.5 ? b.transfer.fromId : b.transfer.toId);
+      const pos = bombWorldPos(sim);
+      let best = null, bestDist = Infinity;
+      for (const p of sim.players) {
+        if (!p.alive) continue;
+        const d = dist(pos, seatPosition(p.seat, sim.seatCount));
+        if (d < bestDist) { bestDist = d; best = p; }
+      }
+      victim = best;
     } else {
       victim = getPlayer(sim, b.holderId);
     }
     sim.explosionAt = bombWorldPos(sim);
+    sim.explosionVictimPos = victim ? seatPosition(victim.seat, sim.seatCount) : null;
+    sim.explosionVictimId = victim ? victim.id : null;
+    // Mid-air blast gets the staged presentation (freeze at 0s -> ring
+    // reaches the victim -> fast expand + fade); an in-hand blast keeps the
+    // original instant ring. The kill itself already happened right here.
+    sim.explosionMidAir = !!b.transfer;
     if (victim) {
       eliminate(sim, victim);
       addEvent(sim, `BOOM! ${victim.name} was eliminated`);
@@ -311,6 +428,7 @@ const Sim = (() => {
       if (next && sim.phase === "playing") {
         giveBomb(sim, next);
         addEvent(sim, `The bomb moved to ${next.name}`);
+        bounceRealIfOccupied(sim, next);
       } else {
         sim.bomb.holderId = null;
       }
@@ -319,6 +437,7 @@ const Sim = (() => {
       if (next && sim.phase === "playing") {
         giveBomb(sim, next);
         addEvent(sim, `The bomb moved to ${next.name}`);
+        bounceRealIfOccupied(sim, next);
       } else {
         sim.bomb.holderId = null;
       }
@@ -334,7 +453,12 @@ const Sim = (() => {
     const slot = p.hand.indexOf(null);
     if (slot === -1) return; // hand full: no draw, no charge
     p.coins -= C.CardDrawCost;
-    p.hand[slot] = Cards.rollCard();               // host decides which card
+    // While bombs in play (real + fakes) are at the player-count cap, Fake
+    // Bomb leaves the draw pool entirely — the card would be unusable dead
+    // weight, so it can't even be drawn until a slot frees up.
+    const bombsInPlay = (sim.bomb ? 1 : 0) + sim.fakeBombs.length;
+    const exclude = bombsInPlay >= sim.players.length ? ["fakebomb"] : null;
+    p.hand[slot] = Cards.rollCard(exclude);        // host decides which card
     addEvent(sim, `${p.name} drew a card`);
   }
 
@@ -393,11 +517,12 @@ const Sim = (() => {
         break;
 
       case "projectile": {
-        // A player holding a weapon needs both hands free to aim it, and the
-        // bomb holder's hands are full holding the bomb — but once it's
-        // been thrown and is in flight (b.transfer), their hands are free
-        // again even though b.holderId hasn't formally changed yet.
-        if (b.holderId === p.id && !b.transfer) return;
+        // A player holding a weapon needs both hands free to aim it, and a
+        // bomb holder's hands are full holding the bomb — real or fake, the
+        // rule must match or the decoy gives itself away. Once a bomb has
+        // been thrown and is in flight, their hands are free again even
+        // though ownership hasn't formally changed yet.
+        if (holdsAnyBomb(sim, p)) return;
         // Real 2D projectiles (never hitscan), fired from the player's hand
         // toward their current mouse aim. +Time Repair Kits are a single
         // throw, consumed immediately. -Time Gun cards hold C.GunBurstCount
@@ -425,6 +550,47 @@ const Sim = (() => {
         }
         break;
       }
+
+      case "grapple":
+        // Same rule as projectile cards: can't aim while your hands are
+        // literally on a bomb (real or fake). Once thrown it's in flight
+        // and hands are free again even before ownership formally changes.
+        if (holdsAnyBomb(sim, p)) return;
+        fireClaw(sim, p);
+        consume();
+        addEvent(sim, `${p.name} fired a Grapple Claw`);
+        break;
+
+      case "reinforced":
+        p.armBuffRemaining = C.ReinforcedArmDuration;
+        consume();
+        addEvent(sim, `${p.name} equipped a Reinforced Arm`);
+        break;
+
+      case "fakebomb": {
+        // Only usable while not already holding a bomb (real or fake — your
+        // hands must be free to pull one out), and only while the total bomb
+        // count (real + fakes currently in play) hasn't already reached the
+        // player count — otherwise bombs could keep multiplying indefinitely.
+        if (holdsAnyBomb(sim, p)) return;
+        const bombsInPlay = (b ? 1 : 0) + sim.fakeBombs.length;
+        if (bombsInPlay >= sim.players.length) return;
+        sim.fakeBombs.push({
+          id: sim.nextFakeId++,
+          remaining: C.FakeBombMinDuration +
+            Math.random() * (C.FakeBombMaxDuration - C.FakeBombMinDuration),
+          holderId: p.id,
+          offset: { x: 0, y: 0 },
+          transfer: null,
+          // The creator alone gets to read the decoy's rolled timer for a
+          // few seconds (delivered only inside their own snapshot).
+          revealTo: p.id,
+          revealRemaining: C.FakeBombRevealDuration,
+        });
+        consume();
+        addEvent(sim, `${p.name} pulled out a bomb...`);
+        break;
+      }
     }
   }
 
@@ -446,6 +612,28 @@ const Sim = (() => {
       y: seat.y + dy * C.MuzzleOffset,
       vx: dx * C.ProjectileSpeed,
       vy: dy * C.ProjectileSpeed,
+    });
+  }
+
+  // Grapple Claw: a fast outbound throw tagged isClaw so stepProjectiles()
+  // knows a hit should reel the bomb in rather than change its time.
+  function fireClaw(sim, p) {
+    const seat = seatPosition(p.seat, sim.seatCount);
+    let dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001) { dx = 0; dy = -1; } else { dx /= len; dy /= len; }
+    sim.projectiles.push({
+      id: sim.nextProjId++,
+      ownerId: p.id,
+      isClaw: true,
+      x: seat.x + dx * C.MuzzleOffset,
+      y: seat.y + dy * C.MuzzleOffset,
+      vx: dx * C.GrappleFireSpeed,
+      vy: dy * C.GrappleFireSpeed,
+      // Launch point, kept so the renderer can draw the trailing cable from
+      // the thrower's hand out to the flying claw head.
+      ox: seat.x + dx * C.MuzzleOffset,
+      oy: seat.y + dy * C.MuzzleOffset,
     });
   }
 
@@ -472,6 +660,26 @@ const Sim = (() => {
           // Frozen (Freeze Stopwatch): the bomb is invincible while time is
           // stopped — hits still vanish the projectile but never touch time.
           addEvent(sim, "FROZEN — NO EFFECT", bombPos.x, bombPos.y);
+        } else if (pr.isClaw) {
+          // Latches on and reels the bomb straight to the claw owner. Reuses
+          // the same b.transfer the explosion/other-claw/shot logic already
+          // understands, so the bomb stays explodable/shootable/stealable
+          // for the whole retract, whether it was static or already mid-pass.
+          const owner = getPlayer(sim, pr.ownerId);
+          if (owner && owner.alive) {
+            const claimerSeat = seatPosition(owner.seat, sim.seatCount);
+            const claimDist = dist(bombPos, claimerSeat);
+            b.transfer = {
+              fromId: b.holderId,
+              toId: owner.id,
+              elapsed: 0,
+              duration: Math.max(0.001, claimDist / C.GrappleRetractSpeed),
+              fromPos: bombPos,
+              toPos: claimerSeat,
+              claw: true,   // render the reel-in as a claw + cable, not a plain pass
+            };
+            addEvent(sim, `${owner.name} grappled the bomb!`, bombPos.x, bombPos.y);
+          }
         } else if (pr.amount < 0) {
           // No floor: a gun hit can bring the bomb straight to 0 and detonate it.
           b.remaining += pr.amount;
@@ -483,6 +691,39 @@ const Sim = (() => {
         }
         continue;
       }
+
+      // Fake bombs are physically real to projectiles too — a decoy that
+      // let shots sail through would instantly out itself. Time hits shift
+      // the decoy's own hidden timer (identical floating text included) and
+      // a claw reels the decoy in exactly like the real thing.
+      let hitFake = false;
+      for (const f of sim.fakeBombs) {
+        const fpos = fakeWorldPos(sim, f);
+        if (dist(pr, fpos) > C.BombRadius + C.ProjectileRadius) continue;
+        hitFake = true;
+        if (pr.isClaw) {
+          const owner = getPlayer(sim, pr.ownerId);
+          if (owner && owner.alive) {
+            const claimerSeat = seatPosition(owner.seat, sim.seatCount);
+            f.transfer = {
+              fromId: f.holderId,
+              toId: owner.id,
+              elapsed: 0,
+              duration: Math.max(0.001, dist(fpos, claimerSeat) / C.GrappleRetractSpeed),
+              fromPos: fpos,
+              toPos: claimerSeat,
+              claw: true,
+            };
+            addEvent(sim, `${owner.name} grappled the bomb!`, fpos.x, fpos.y);
+          }
+        } else {
+          // Can drive it to 0 early: it just pops harmlessly next tick.
+          f.remaining += pr.amount;
+          addEvent(sim, `${pr.amount > 0 ? "+" : ""}${pr.amount} SEC`, fpos.x, fpos.y);
+        }
+        break;
+      }
+      if (hitFake) continue;
 
       // Player bodies block projectiles (no damage, no effect) — positioning
       // the bomb behind your own body is a real defensive option.
@@ -601,71 +842,47 @@ const Sim = (() => {
 
       // Cosmetic only: which hand slot (if any) this player is currently
       // aiming, so everyone can see they're wielding a thrown/fired weapon.
-      p.equippedSlot = (typeof inp.equip === "number" && p.hand[inp.equip]
-        && Cards.TYPES[p.hand[inp.equip]].kind === "projectile") ? inp.equip : null;
+      p.equippedSlot = (typeof inp.equip === "number" && p.hand[inp.equip] &&
+        ["projectile", "grapple"].includes(Cards.TYPES[p.hand[inp.equip]].kind)) ? inp.equip : null;
 
-      // Income: passive for everyone alive, plus a holder bonus on top.
+      // Income: passive for everyone alive, plus a holder bonus stacked on
+      // top while holding — same rates as the original economy. Once a
+      // continuous hold crosses BombHolderCoinDuration, income drops to zero
+      // entirely: a penalty against camping the bomb to stall. Passing it
+      // off and getting it back reopens the window.
+      const holding = p === holder;
+      const stalling = holding && p.holdElapsed >= C.BombHolderCoinDuration;
       p.passiveAcc += dt;
-      while (p.passiveAcc >= C.PassiveCoinInterval) {
-        p.passiveAcc -= C.PassiveCoinInterval;
-        p.coins += C.PassiveCoinAmount;
-      }
-      if (p === holder) {
-        // Bonus income only accrues for the first BombHolderCoinDuration
-        // seconds of a continuous hold — passing it off and getting it back
-        // reopens the window.
-        if (p.holdElapsed < C.BombHolderCoinDuration) {
-          const window = Math.min(dt, C.BombHolderCoinDuration - p.holdElapsed);
-          p.holderAcc += window;
+      if (stalling) {
+        p.passiveAcc = 0;
+        p.holderAcc = 0;
+      } else {
+        while (p.passiveAcc >= C.PassiveCoinInterval) {
+          p.passiveAcc -= C.PassiveCoinInterval;
+          p.coins += C.PassiveCoinAmount;
+        }
+        if (holding) {
+          p.holderAcc += dt;
           while (p.holderAcc >= C.BombHolderCoinInterval) {
             p.holderAcc -= C.BombHolderCoinInterval;
             p.coins += C.BombHolderCoinAmount;
           }
         }
-        p.holdElapsed += dt;
       }
+      if (holding) p.holdElapsed += dt;
 
       if (p.revealRemaining > 0) p.revealRemaining = Math.max(0, p.revealRemaining - dt);
+      if (p.armBuffRemaining > 0) p.armBuffRemaining = Math.max(0, p.armBuffRemaining - dt);
+      p.passLock = Math.max(0, p.passLock - dt);
 
-      // Holder-only: arm control and passing. The client only sends a mouse
-      // position; the host computes and clamps the actual bomb offset, then
-      // moves it toward that target at a limited speed — the arm doesn't
-      // teleport the bomb to wherever the mouse jumps to. Once a pass is
-      // thrown the bomb is in flight (b.transfer) and the sender loses arm
-      // control until it either arrives or explodes mid-transfer.
+      // Whichever bomb this player is physically holding right now — the
+      // real one or a fake decoy — is carried and thrown through the exact
+      // same code path, so nothing about the handling can give a fake away.
+      const heldFake = fakeHeldBy(sim, p.id);
       if (p === holder && !b.transfer) {
-        p.passLock = Math.max(0, p.passLock - dt);
-        const seat = seatPosition(p.seat, sim.seatCount);
-        const dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
-        const len = Math.hypot(dx, dy);
-        let target = b.offset;
-        if (len > 0.001) {
-          const r = Math.min(len, C.BombArmReach);
-          target = { x: (dx / len) * r, y: (dy / len) * r };
-        }
-        const ox = target.x - b.offset.x, oy = target.y - b.offset.y;
-        const step = Math.hypot(ox, oy);
-        const maxStep = C.BombArmMoveSpeed * dt;
-        b.offset = (step <= maxStep || step < 0.001)
-          ? target
-          : { x: b.offset.x + (ox / step) * maxStep, y: b.offset.y + (oy / step) * maxStep };
-        if (inp.pass && p.passLock <= 0) {
-          const next = nextAliveFrom(sim, p.seat);
-          if (next && next !== p) {
-            const fromPos = bombWorldPos(sim);
-            const toPos = seatPosition(next.seat, sim.seatCount);
-            const dist = Math.hypot(toPos.x - fromPos.x, toPos.y - fromPos.y);
-            b.transfer = {
-              fromId: p.id,
-              toId: next.id,
-              elapsed: 0,
-              duration: Math.max(0.001, dist / C.BombPassSpeed),
-              fromPos,
-              toPos,
-            };
-            addEvent(sim, `${p.name} is passing the bomb to ${next.name}...`);
-          }
-        }
+        controlHeldBomb(sim, p, b, inp, dt);
+      } else if (heldFake) {
+        controlHeldBomb(sim, p, heldFake, inp, dt);
       }
 
       if (inp.draw) tryDraw(sim, p);
@@ -683,9 +900,129 @@ const Sim = (() => {
       }
     }
 
+    stepFakeBombs(sim, dt);
     stepProjectiles(sim, dt);
 
     if (b.remaining <= 0) explode(sim);
+  }
+
+  // Arm control + SPACE pass for whichever bomb the player is physically
+  // holding. The real bomb and fake decoys share this deliberately: the
+  // clamped arm movement, pass lock, Reinforced Arm free-targeting/speed and
+  // even the public "is passing the bomb" announcement are all identical.
+  // The client only sends a mouse position; the host computes and clamps the
+  // actual offset and moves it at a limited speed — the arm never teleports.
+  function controlHeldBomb(sim, p, bombLike, inp, dt) {
+    const seat = seatPosition(p.seat, sim.seatCount);
+    const dx = p.aim.x - seat.x, dy = p.aim.y - seat.y;
+    const len = Math.hypot(dx, dy);
+    let target = bombLike.offset;
+    if (len > 0.001) {
+      const r = Math.min(len, C.BombArmReach);
+      target = { x: (dx / len) * r, y: (dy / len) * r };
+    }
+    const ox = target.x - bombLike.offset.x, oy = target.y - bombLike.offset.y;
+    const step = Math.hypot(ox, oy);
+    const maxStep = C.BombArmMoveSpeed * dt;
+    bombLike.offset = (step <= maxStep || step < 0.001)
+      ? target
+      : { x: bombLike.offset.x + (ox / step) * maxStep, y: bombLike.offset.y + (oy / step) * maxStep };
+
+    if (inp.pass && p.passLock <= 0) {
+      const buffed = p.armBuffRemaining > 0;
+      // Reinforced Arm: pick whichever other alive player is nearest to
+      // the live aim point instead of the fixed next-seat order.
+      const next = buffed ? nearestAliveTo(sim, p.aim, p.id) : nextAliveFrom(sim, p.seat);
+      if (next && next !== p) {
+        const fromPos = { x: seat.x + bombLike.offset.x, y: seat.y + bombLike.offset.y };
+        const toPos = seatPosition(next.seat, sim.seatCount);
+        const speed = buffed ? C.BombPassSpeed * C.ReinforcedArmSpeedMult : C.BombPassSpeed;
+        // holderId stays on the sender while in flight for real and fake
+        // alike (arrival reassigns it), so mid-pass state looks the same.
+        bombLike.transfer = {
+          fromId: p.id,
+          toId: next.id,
+          elapsed: 0,
+          duration: Math.max(0.001, dist(fromPos, toPos) / speed),
+          fromPos,
+          toPos,
+        };
+        addEvent(sim, `${p.name} is passing the bomb to ${next.name}...`);
+      }
+    }
+  }
+
+  // Per-tick fake bomb upkeep: each decoy runs its own hidden countdown (a
+  // harmless staged pop at 0) and settles transfer arrivals with the same
+  // hot-potato bounce rule as the real bomb.
+  function stepFakeBombs(sim, dt) {
+    const survivors = [];
+    for (const f of sim.fakeBombs) {
+      f.remaining -= dt;
+      if (f.revealRemaining > 0) f.revealRemaining = Math.max(0, f.revealRemaining - dt);
+      if (f.remaining <= 0) {
+        const pos = fakeWorldPos(sim, f);
+        const holder = !f.transfer ? getPlayer(sim, f.holderId) : null;
+        // Mid-air pops get the same staged blast presentation as a real
+        // mid-air explosion; in someone's hands it bursts instantly like a
+        // real in-hand one. Either way: zero damage, bluff revealed.
+        addEffect(sim, "fakeboom", pos.x, pos.y, { midAir: !!f.transfer });
+        addEvent(sim, holder ? `BOOM! ...${holder.name}'s bomb was a FAKE` : "BOOM! ...that bomb was a FAKE", pos.x, pos.y);
+        continue;
+      }
+      if (f.transfer) {
+        f.transfer.elapsed += dt;
+        if (f.transfer.elapsed >= f.transfer.duration) {
+          const receiver = getPlayer(sim, f.transfer.toId);
+          const arrivedAt = f.transfer.toPos;
+          f.transfer = null;
+          f.holderId = null;
+          if (!receiver || !receiver.alive) {
+            // Receiver died or vanished mid-flight: keep the decoy moving to
+            // the next alive seat, or let it vanish if nobody is left.
+            const next = nextAliveFrom(sim, receiver ? receiver.seat : 0);
+            if (!next) continue;
+            startFakeTransfer(sim, f, arrivedAt, next, null);
+          } else if (holdsAnyBomb(sim, receiver)) {
+            // Hot potato: the bomb that just arrived is the one that bounces
+            // straight onward — what the receiver already held stays put.
+            const next = nextAliveFrom(sim, receiver.seat);
+            if (next && next !== receiver) {
+              startFakeTransfer(sim, f, arrivedAt, next, receiver.id);
+              receiver.passLock = Math.max(receiver.passLock, C.FakeBombForcedPassLock);
+              addEvent(sim, `${receiver.name} was already holding a bomb — bounced it to ${next.name}!`);
+            } else {
+              // Nowhere left to bounce to: it pops harmlessly on the spot.
+              addEffect(sim, "fakeboom", arrivedAt.x, arrivedAt.y, { midAir: true });
+              addEvent(sim, "BOOM! ...that bomb was a FAKE", arrivedAt.x, arrivedAt.y);
+              continue;
+            }
+          } else {
+            f.holderId = receiver.id;
+            f.offset = { x: 0, y: 0 };
+            addEvent(sim, `${receiver.name} received the bomb`);
+          }
+        }
+      }
+      survivors.push(f);
+    }
+    sim.fakeBombs = survivors;
+  }
+
+  // Launch a fake bomb toward a seat at normal pass speed. holderId mirrors
+  // the real bomb's mid-flight convention (the player it's "coming from", or
+  // null when it's being forwarded off a dead seat).
+  function startFakeTransfer(sim, f, fromPos, toPlayer, holderId) {
+    const toPos = seatPosition(toPlayer.seat, sim.seatCount);
+    f.holderId = holderId;
+    f.transfer = {
+      fromId: holderId,
+      toId: toPlayer.id,
+      elapsed: 0,
+      duration: Math.max(0.001, dist(fromPos, toPos) / C.BombPassSpeed),
+      fromPos,
+      toPos,
+    };
   }
 
   // ---- Snapshots (the only thing clients ever see) -------------------------
@@ -707,6 +1044,9 @@ const Sim = (() => {
       winnerName: sim.winnerId ? getPlayer(sim, sim.winnerId).name : null,
       aliveCount: sim.players.filter(p => p.alive).length,
       explosionAt: sim.phase === "exploding" ? sim.explosionAt : null,
+      explosionVictimPos: sim.phase === "exploding" ? sim.explosionVictimPos : null,
+      explosionVictimId: sim.phase === "exploding" ? sim.explosionVictimId : null,
+      explosionMidAir: sim.phase === "exploding" ? sim.explosionMidAir : false,
       bomb: b ? {
         x: bombPos.x,
         y: bombPos.y,
@@ -716,15 +1056,40 @@ const Sim = (() => {
         curse: b.curseActive,              // announced publicly, so visible
         speedMult: b.speedMult,            // Speed Up/Down are announced publicly too
         transferring: !!b.transfer,        // in flight between seats: render it mid-pass
+        // Being reeled in by a Grapple Claw: render a cable + claw gripping
+        // the bomb, anchored at the puller's seat (the transfer target).
+        claw: !!(b.transfer && b.transfer.claw),
+        clawX: b.transfer && b.transfer.claw ? b.transfer.toPos.x : null,
+        clawY: b.transfer && b.transfer.claw ? b.transfer.toPos.y : null,
         // Public reveal window: everyone can see the exact remaining time for
         // the first few real seconds of a bomb, then it goes hidden as usual.
         publicRemaining: (sim.phase === "playing" && sim.playElapsed < C.PublicTimeRevealDuration)
           ? b.remaining : null,
       } : null,
+      // Fake decoys, rendered with the identical bomb body + holder arms as
+      // the real one. Which one is real is never derivable from position,
+      // carry or pass behavior — that's the whole bluff.
+      fakeBombs: sim.fakeBombs.map(f => {
+        const pos = fakeWorldPos(sim, f);
+        return {
+          x: pos.x,
+          y: pos.y,
+          holderId: f.holderId,
+          transferring: !!f.transfer,
+          claw: !!(f.transfer && f.transfer.claw),
+          clawX: f.transfer && f.transfer.claw ? f.transfer.toPos.x : null,
+          clawY: f.transfer && f.transfer.claw ? f.transfer.toPos.y : null,
+          // Creator-only peek at the decoy's rolled timer, right after
+          // pulling it out. Strictly per-viewer: never on the wire for
+          // anyone else, same guarantee as the Magnifying Glass reveal.
+          privateRemaining: (f.revealTo === viewerId && f.revealRemaining > 0) ? f.remaining : null,
+        };
+      }),
       players: sim.players.map(p => {
         const seat = seatPosition(p.seat, sim.seatCount);
         const equipped = p.equippedSlot != null;
         const revealing = p.revealRemaining > 0;
+        const isHolderNow = !!(b && b.holderId === p.id);
         return {
           id: p.id, name: p.name, seat: p.seat, x: seat.x, y: seat.y, alive: p.alive,
           equipped,                          // wielding a throwable/gun card — visible to everyone
@@ -736,7 +1101,16 @@ const Sim = (() => {
           revealing,                         // using a Magnifying Glass right now — visible to everyone (not the reading itself)
           // Currently inside the holder-bonus income window — visible to
           // everyone so the extra coin trickle can be shown as a particle cue.
-          earningBonus: !!(b && b.holderId === p.id && p.holdElapsed < C.BombHolderCoinDuration),
+          earningBonus: isHolderNow && p.holdElapsed < C.BombHolderCoinDuration,
+          // Past the grace window: holding the bomb currently earns nothing —
+          // shown so everyone can see the stalling penalty has kicked in.
+          earningPenalty: isHolderNow && p.holdElapsed >= C.BombHolderCoinDuration,
+          // Coins and hand size are public — hovering another player shows
+          // both so you can size up who's ahead and who's stocked up on cards.
+          coins: p.coins,
+          cardCount: p.hand.filter(c => c != null).length,
+          // Reinforced Arm: public "iron arm" cue while the buff is active.
+          armBuffed: p.armBuffRemaining > 0,
         };
       }),
       you: viewer ? {
@@ -745,12 +1119,18 @@ const Sim = (() => {
         coins: viewer.coins,
         hand: viewer.hand.slice(),
         isHolder: !!(b && b.holderId === viewerId),
+        // Fake-bomb mirror of isHolder, split into "in my hands right now"
+        // and "my throw is still in flight" so the local UI (pass button,
+        // hands-full card locks) can treat a fake exactly like the real one.
+        holdsFake: !!fakeHeldBy(sim, viewerId),
+        fakePassing: sim.fakeBombs.some(f => f.holderId === viewerId && f.transfer),
         // Present once at least one shot of a multi-click gun has already
         // been fired: canceling now must discard the unfired rounds rather
         // than leaving the card untouched.
         gunPending: viewer.gunPending ? { slot: viewer.gunPending.slot, shotsLeft: viewer.gunPending.shotsLeft } : null,
         passLock: viewer.passLock,
-        canPass: !!(b && !b.transfer && b.holderId === viewerId && viewer.passLock <= 0 && sim.phase === "playing"),
+        canPass: !!(sim.phase === "playing" && viewer.passLock <= 0 &&
+          ((b && !b.transfer && b.holderId === viewerId) || fakeHeldBy(sim, viewerId))),
         // Spectators (eliminated, waiting out the match) always see the exact
         // bomb time — they can no longer affect gameplay, so there's nothing
         // left to hide from them. Living players need an active Magnifying
@@ -760,8 +1140,12 @@ const Sim = (() => {
           ? { remaining: viewer.revealRemaining, bombTime: b.remaining }
           : null,
       } : null,
-      projectiles: sim.projectiles.map(pr => ({ x: pr.x, y: pr.y, amount: pr.amount })),
+      projectiles: sim.projectiles.map(pr => ({
+        x: pr.x, y: pr.y, amount: pr.amount, isClaw: !!pr.isClaw,
+        ox: pr.isClaw ? pr.ox : undefined, oy: pr.isClaw ? pr.oy : undefined,
+      })),
       events: sim.events.slice(-30),
+      effects: sim.effects.slice(-8),
     };
 
     if (includeDebug) snap.debug = buildDebug(sim);
@@ -799,6 +1183,11 @@ const Sim = (() => {
       nextAlive: holder ? (nextAliveFrom(sim, holder.seat) || {}).name : null,
       projectiles: sim.projectiles.map(pr => ({
         amount: pr.amount, x: Math.round(pr.x), y: Math.round(pr.y),
+      })),
+      fakeBombs: sim.fakeBombs.map(f => ({
+        holder: f.holderId ? ((getPlayer(sim, f.holderId) || {}).name || f.holderId) : "-",
+        to: f.transfer ? ((getPlayer(sim, f.transfer.toId) || {}).name || "?") : null,
+        remaining: f.remaining,
       })),
       players: sim.players.map(p => ({
         name: p.name,

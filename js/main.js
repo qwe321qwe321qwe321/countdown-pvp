@@ -43,6 +43,34 @@
   const canvas = $("game");
   const ctx = canvas.getContext("2d");
 
+  // ---- Item codex (right-side reference panel) ----
+  // Static list of every card actually obtainable this match (drop pool +
+  // starting hand), built once from the same Cards.TYPES the game runs on.
+  (function buildCodex() {
+    const wrap = $("cardCodex");
+    if (!wrap) return;
+    const ids = Object.keys(Cards.TYPES).filter(id =>
+      (CONFIG.CardDropWeights[id] || 0) > 0 || CONFIG.StartingHand.includes(id));
+    for (const id of ids) {
+      const def = Cards.TYPES[id];
+      const row = document.createElement("div");
+      row.className = "codexRow";
+      const emoji = document.createElement("div");
+      emoji.className = "codexEmoji";
+      emoji.textContent = def.emoji;
+      const body = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "codexName";
+      name.textContent = def.name;
+      const desc = document.createElement("div");
+      desc.className = "codexDesc";
+      desc.textContent = def.desc || "";
+      body.append(name, desc);
+      row.append(emoji, body);
+      wrap.appendChild(row);
+    }
+  })();
+
   // ---- Player name persistence ----
   const NAME_KEY = "countdown-pvp:playerName";
   const savedName = localStorage.getItem(NAME_KEY);
@@ -189,11 +217,12 @@
     const you = latestSnap && latestSnap.you;
     const cardId = you && you.hand[slot];
     if (!cardId) return;
-    if (Cards.TYPES[cardId].kind === "projectile") {
-      // Both hands are full holding the bomb — the holder can't wield a
-      // weapon too. But once it's been thrown and is in flight, their hands
-      // are free again even though isHolder hasn't flipped yet.
-      const reallyHolding = you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring);
+    if (["projectile", "grapple"].includes(Cards.TYPES[cardId].kind)) {
+      // Both hands are full holding a bomb (real or fake) — the holder
+      // can't wield a weapon too. But once it's been thrown and is in
+      // flight, their hands are free again even though isHolder hasn't
+      // flipped yet.
+      const reallyHolding = (you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring)) || you.holdsFake;
       if (reallyHolding) return;
       if (armedSlot === slot) { deactivateArmed(); return; }
       deactivateArmed(); // switching weapons forfeits whatever was mid-burst
@@ -245,7 +274,7 @@
       // Drop the armed card if it left the hand (used elsewhere, discarded,
       // died, or the phase changed) so the UI never shows a stale aim state.
       const you = latestSnap.you;
-      const reallyHolding = you && you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring);
+      const reallyHolding = you && ((you.isHolder && !(latestSnap.bomb && latestSnap.bomb.transferring)) || you.holdsFake);
       if (armedSlot != null && (!you || !you.hand[armedSlot] || reallyHolding || latestSnap.phase !== "playing")) {
         armedSlot = null;
         collector.setEquip(null);
@@ -256,7 +285,8 @@
       // only the local player's own arm/aim predicted forward from the mouse.
       const viewSnap = role === "client" ? applyLocalPrediction(latestSnap, dtMs) : latestSnap;
 
-      Render.draw(ctx, viewSnap, myId);
+      const hoverPt = collector.peek();
+      Render.draw(ctx, viewSnap, myId, hoverPt.mx != null ? { x: hoverPt.mx, y: hoverPt.my } : null);
       Render.updateDom(dom, viewSnap, {
         useCard: s => activateCard(s),
         discardCard: s => { if (armedSlot === s) armedSlot = null; collector.pressDiscard(s); },

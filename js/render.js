@@ -10,7 +10,7 @@ const Render = (() => {
 
   // ---- Canvas --------------------------------------------------------------
 
-  function draw(ctx, snap, myId) {
+  function draw(ctx, snap, myId, hoverPoint) {
     const W = C.WorldWidth, H = C.WorldHeight;
     ctx.fillStyle = bgColorFor(snap);
     ctx.fillRect(0, 0, W, H);
@@ -27,12 +27,24 @@ const Render = (() => {
 
     const holder = snap.bomb ? snap.players.find(p => p.id === snap.bomb.holderId) : null;
 
+    // Staged mid-air explosion: the victim was already eliminated the instant
+    // the timer hit 0, but they keep *looking* alive until the blast ring
+    // visually reaches them (see the explosion block below).
+    let pendingVictimId = null;
+    if (snap.phase === "exploding" && snap.explosionMidAir && snap.explosionVictimId) {
+      const elapsed = C.ExplosionTransitionDuration - snap.phaseTimer;
+      if (elapsed < C.ExplosionHoldDuration + C.ExplosionRingCatchUpDuration) {
+        pendingVictimId = snap.explosionVictimId;
+      }
+    }
+
     // Players (fixed seats, never move).
     for (const p of snap.players) {
       const col = SEAT_COLORS[p.seat % SEAT_COLORS.length];
+      const aliveLook = p.alive || p.id === pendingVictimId;
       ctx.beginPath();
       ctx.arc(p.x, p.y, C.PlayerBodyRadius, 0, Math.PI * 2);
-      if (p.alive) {
+      if (aliveLook) {
         ctx.fillStyle = col;
         ctx.fill();
         ctx.lineWidth = 2.5;
@@ -54,7 +66,7 @@ const Render = (() => {
       }
       ctx.font = "12px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillStyle = p.alive ? "#e8e8e8" : "#767e8a";
+      ctx.fillStyle = aliveLook ? "#e8e8e8" : "#767e8a";
       const tag = p.id === myId ? " (you)" : "";
       ctx.fillText(p.name + tag, p.x, p.y - C.PlayerBodyRadius - 10);
 
@@ -72,37 +84,91 @@ const Render = (() => {
         ctx.fillText("🔍", p.x + C.PlayerBodyRadius + 4, p.y - C.PlayerBodyRadius - 6);
       }
 
-      // Bonus-income cue: little coins drifting up while the holder-bonus
-      // window is open, gone the instant it stops (pass it off / window ends).
+      // Bonus-income cue: pulsing ring + coins drifting up while the
+      // holder-bonus window is open, gone the instant it stops (pass it off
+      // / window ends).
       if (p.alive && p.earningBonus) drawCoinParticles(ctx, p, snap.time);
+
+      // Stalling penalty cue: holder has been sitting on the bomb past the
+      // grace window and is currently earning nothing.
+      if (p.alive && p.earningPenalty) drawStalledIcon(ctx, p, snap.time);
+
+      // Reinforced Arm: public "iron arm" cue while the buff is active.
+      if (p.alive && p.armBuffed) {
+        ctx.font = "18px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("🦾", p.x - C.PlayerBodyRadius - 4, p.y - C.PlayerBodyRadius - 6);
+      }
+
+    }
+
+    // Hover tooltip: aim the mouse at another player to see their coins and
+    // card count without needing to ask.
+    if (hoverPoint) {
+      const target = snap.players.find(p =>
+        p.id !== myId && p.alive &&
+        Math.hypot(p.x - hoverPoint.x, p.y - hoverPoint.y) <= C.PlayerBodyRadius + 14);
+      if (target) drawPlayerTooltip(ctx, target);
+    }
+
+    // Fake decoys: drawn with the identical holder arms + bomb body as the
+    // real one — on screen there is simply no way to tell them apart.
+    for (const f of snap.fakeBombs) {
+      const fHolder = f.holderId ? snap.players.find(p => p.id === f.holderId) : null;
+      if (fHolder && fHolder.alive && !f.transferring) drawArms(ctx, fHolder, f, fHolder.armBuffed);
+      if (f.claw) drawClawTether(ctx, f.clawX, f.clawY, f.x, f.y);
+      drawBombBody(ctx, f.x, f.y, snap.time);
+      // Creator-only peek at the decoy's timer (only ever present in the
+      // creator's own snapshot) — same look as the Magnifying Glass reveal.
+      if (f.privateRemaining != null) {
+        ctx.font = "bold 17px monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#ffe27a";
+        ctx.fillText(f.privateRemaining.toFixed(1) + "s", f.x, f.y);
+        ctx.textBaseline = "alphabetic";
+      }
     }
 
     // Arms: body -> hands -> bomb, only for the current holder, and only
     // while the bomb isn't mid-flight between seats (nobody's arms are on it).
     if (snap.bomb && !snap.bomb.transferring && holder && holder.alive) {
-      drawArms(ctx, holder, snap.bomb);
+      drawArms(ctx, holder, snap.bomb, holder.armBuffed);
     }
 
-    // Bomb.
-    if (snap.bomb) drawBomb(ctx, snap);
+    // Bomb (with cable + gripping claw while a grapple is reeling it in).
+    if (snap.bomb) {
+      if (snap.bomb.claw) drawClawTether(ctx, snap.bomb.clawX, snap.bomb.clawY, snap.bomb.x, snap.bomb.y);
+      drawBomb(ctx, snap);
+    }
 
-    // Projectiles: red = minus-time, green = plus-time.
+    // Projectiles: red = minus-time, green = plus-time; a flying grapple is
+    // a claw head trailing its cable back to where it was thrown from.
     for (const pr of snap.projectiles) {
+      if (pr.isClaw) { drawClawProjectile(ctx, pr); continue; }
       ctx.beginPath();
       ctx.arc(pr.x, pr.y, C.ProjectileRadius, 0, Math.PI * 2);
       ctx.fillStyle = pr.amount < 0 ? "#ff5d5d" : "#5dff8a";
       ctx.fill();
     }
 
-    // Explosion transition.
+    // Explosion transition. Mid-air blasts get the full staged sequence
+    // (frozen "0.0s" beat first); in-hand blasts skip the freeze and burst
+    // immediately — but both rings sweep out to the victim, keep growing
+    // fast and fade, so nothing ever hangs frozen on screen.
     if (snap.phase === "exploding" && snap.explosionAt) {
-      const t = 1 - snap.phaseTimer / C.ExplosionTransitionDuration; // 0..1
-      const r = 20 + t * 140;
-      ctx.beginPath();
-      ctx.arc(snap.explosionAt.x, snap.explosionAt.y, r, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(255,140,40,${Math.max(0, 1 - t)})`;
-      ctx.lineWidth = 10;
-      ctx.stroke();
+      const elapsed = C.ExplosionTransitionDuration - snap.phaseTimer;
+      drawStagedBlast(ctx, snap.explosionAt, snap.explosionVictimPos, elapsed, snap.time,
+        snap.explosionMidAir ? C.ExplosionHoldDuration : 0);
+    }
+
+    // One-shot positioned effects: a fake bomb popping harmlessly — the
+    // exact same blast presentation as the real thing (mid-air pops include
+    // the frozen-at-0 beat), just with nobody to kill.
+    for (const ef of snap.effects || []) {
+      if (ef.type !== "fakeboom") continue;
+      const age = snap.time - ef.time;
+      drawStagedBlast(ctx, ef, null, age, snap.time, ef.midAir ? C.ExplosionHoldDuration : 0);
     }
 
     // Floating public feedback ("-5 SEC", "SHIELD BLOCKED IT", ...).
@@ -136,12 +202,13 @@ const Render = (() => {
     return `rgb(${mix(base.r, tint.r)},${mix(base.g, tint.g)},${mix(base.b, tint.b)})`;
   }
 
-  function drawArms(ctx, holder, bomb) {
+  function drawArms(ctx, holder, bomb, buffed) {
     let dx = bomb.x - holder.x, dy = bomb.y - holder.y;
     const len = Math.hypot(dx, dy);
     if (len < 0.001) { dx = 0; dy = -1; } else { dx /= len; dy /= len; }
     const px = -dy, py = dx; // perpendicular
-    const col = SEAT_COLORS[holder.seat % SEAT_COLORS.length];
+    // Reinforced Arm: tint the arms silver/metallic while the buff is active.
+    const col = buffed ? "#c9d2dc" : SEAT_COLORS[holder.seat % SEAT_COLORS.length];
     ctx.lineWidth = 7;
     ctx.lineCap = "round";
     ctx.strokeStyle = col;
@@ -246,21 +313,76 @@ const Render = (() => {
   // Deterministic little coin puffs rising off a player, driven purely by
   // snap.time so it needs no particle-system state of its own — matches the
   // rest of this module's "render is a pure function of snap" approach.
+  // Paired with a pulsing golden ring so the bonus window is unmistakable at
+  // a glance, not just a small drifting emoji.
   function drawCoinParticles(ctx, p, time) {
+    const pulse = 0.5 + 0.5 * Math.sin(time * 5);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, C.PlayerBodyRadius + 7 + pulse * 3, 0, Math.PI * 2);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = `rgba(255,213,76,${0.45 + pulse * 0.4})`;
+    ctx.stroke();
+
     const seed = (p.seat * 37) % 100;
-    const COUNT = 3, PERIOD = 0.9;
+    const COUNT = 4, PERIOD = 0.8;
     for (let i = 0; i < COUNT; i++) {
-      const phase = (seed + i * 33.3) % 100 / 100;
+      const phase = (seed + i * 25) % 100 / 100;
       const t = ((time / PERIOD + phase) % 1 + 1) % 1; // 0..1 loop
-      const rise = t * 34;
-      const drift = Math.sin((t + phase) * Math.PI * 2) * 8;
+      const rise = t * 40;
+      const drift = Math.sin((t + phase) * Math.PI * 2) * 10;
       const alpha = 1 - t;
-      ctx.font = `${10 + t * 4}px sans-serif`;
+      ctx.font = `bold ${14 + t * 6}px sans-serif`;
       ctx.textAlign = "center";
       ctx.globalAlpha = alpha;
       ctx.fillText("💰", p.x + drift, p.y - C.PlayerBodyRadius - 6 - rise);
       ctx.globalAlpha = 1;
     }
+  }
+
+  // Red pulsing ring + crossed-out coin: the holder is past the grace window
+  // and currently earning nothing — the stalling penalty is active.
+  function drawStalledIcon(ctx, p, time) {
+    const pulse = 0.5 + 0.5 * Math.sin(time * 6);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, C.PlayerBodyRadius + 7, 0, Math.PI * 2);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = `rgba(255,80,80,${0.4 + pulse * 0.35})`;
+    ctx.stroke();
+    ctx.font = "bold 16px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("🚫💰", p.x, p.y - C.PlayerBodyRadius - 16);
+  }
+
+  // Tooltip shown while aiming at another player: their coin total and hand
+  // size, so you can size up who's ahead without asking.
+  function drawPlayerTooltip(ctx, p) {
+    const text = `💰${p.coins}   🃏${p.cardCount}/${C.MaxHandSize}`;
+    ctx.font = "bold 13px sans-serif";
+    const padX = 8, padY = 5;
+    const w = ctx.measureText(text).width + padX * 2;
+    const h = 20 + padY * 2 - 6;
+    const x = p.x, y = p.y - C.PlayerBodyRadius - 34;
+    ctx.fillStyle = "rgba(20,22,28,0.88)";
+    ctx.strokeStyle = "rgba(255,255,255,0.25)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, x - w / 2, y - h / 2, w, h, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#f0f0f0";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, x, y + 1);
+    ctx.textBaseline = "alphabetic";
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
   }
 
   function drawBomb(ctx, snap) {
@@ -275,25 +397,7 @@ const Render = (() => {
       ctx.strokeStyle = "rgba(120,190,255,0.9)";
       ctx.stroke();
     }
-    // Body + fuse + spark.
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, C.BombRadius, 0, Math.PI * 2);
-    ctx.fillStyle = "#101114";
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "#585f6b";
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(b.x + 4, b.y - C.BombRadius + 2);
-    ctx.quadraticCurveTo(b.x + 12, b.y - C.BombRadius - 8, b.x + 6, b.y - C.BombRadius - 13);
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = "#8a7a54";
-    ctx.stroke();
-    const flick = 2 + Math.sin(snap.time * 20) * 1.5;
-    ctx.beginPath();
-    ctx.arc(b.x + 6, b.y - C.BombRadius - 13, flick, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffce54";
-    ctx.fill();
+    drawBombBody(ctx, b.x, b.y, snap.time);
     // Curse marker (publicly announced when used).
     if (b.curse) {
       ctx.font = "bold 15px sans-serif";
@@ -319,6 +423,128 @@ const Render = (() => {
       ctx.fillText(b.publicRemaining.toFixed(1) + "s", b.x, b.y);
       ctx.textBaseline = "alphabetic";
     }
+  }
+
+  // The bomb silhouette (body + fuse + flickering spark), shared verbatim by
+  // the real bomb, every fake decoy, and the frozen "0.0s" beat of a staged
+  // blast — pixel-identical rendering is what makes the Fake Bomb bluff hold.
+  function drawBombBody(ctx, x, y, time) {
+    ctx.beginPath();
+    ctx.arc(x, y, C.BombRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#101114";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#585f6b";
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + 4, y - C.BombRadius + 2);
+    ctx.quadraticCurveTo(x + 12, y - C.BombRadius - 8, x + 6, y - C.BombRadius - 13);
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = "#8a7a54";
+    ctx.stroke();
+    const flick = 2 + Math.sin(time * 20) * 1.5;
+    ctx.beginPath();
+    ctx.arc(x + 6, y - C.BombRadius - 13, flick, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffce54";
+    ctx.fill();
+  }
+
+  // Staged blast, used for real mid-air explosions and fake-bomb pops alike:
+  // the bomb freezes showing "0.0s" for ExplosionHoldDuration, then a ring
+  // expands until it reaches the victim (or a default radius when there is
+  // no victim to reach), then keeps growing fast while fading out.
+  function drawStagedBlast(ctx, at, victimPos, elapsed, time) {
+    if (elapsed < C.ExplosionHoldDuration) {
+      drawBombBody(ctx, at.x, at.y, time);
+      ctx.font = "bold 17px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#ffe27a";
+      ctx.fillText("0.0s", at.x, at.y);
+      ctx.textBaseline = "alphabetic";
+      return;
+    }
+    const t = elapsed - C.ExplosionHoldDuration;
+    const targetR = victimPos
+      ? Math.max(30, Math.hypot(victimPos.x - at.x, victimPos.y - at.y) - C.PlayerBodyRadius)
+      : 140;
+    let r, alpha;
+    if (t <= C.ExplosionRingCatchUpDuration) {
+      r = targetR * (t / C.ExplosionRingCatchUpDuration);
+      alpha = 0.95;
+    } else {
+      const t2 = t - C.ExplosionRingCatchUpDuration;
+      r = targetR + t2 * C.ExplosionRingExpandSpeed;
+      alpha = 1 - t2 / C.ExplosionRingFadeDuration;
+    }
+    if (alpha <= 0) return;
+    ctx.beginPath();
+    ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,140,40,${alpha})`;
+    ctx.lineWidth = 10;
+    ctx.stroke();
+  }
+
+  // ---- Grapple Claw visuals -------------------------------------------------
+
+  // Taut steel cable from an anchor point (the thrower's hand / puller's
+  // seat) out to the claw head.
+  function drawClawCable(ctx, x0, y0, x1, y1) {
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#8a93a0";
+    ctx.stroke();
+  }
+
+  // Three-pronged claw head. `spread` is 1 while flying (prongs wide open,
+  // ready to snatch) and near 0 once latched (prongs clamped shut around the
+  // bomb). Drawn pointing along `angle`.
+  function drawClawHead(ctx, x, y, angle, spread) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#c9d2dc";
+    ctx.lineWidth = 3.5;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(-7, side * 3);
+      ctx.quadraticCurveTo(4, side * (7 + 9 * spread), 13, side * (4 + 7 * spread));
+      ctx.quadraticCurveTo(17, side * (2 + 5 * spread), 14, side * (1 + 2 * spread));
+      ctx.stroke();
+    }
+    // Center spike.
+    ctx.beginPath();
+    ctx.moveTo(-5, 0);
+    ctx.lineTo(13, 0);
+    ctx.stroke();
+    // Hub the prongs hinge on.
+    ctx.beginPath();
+    ctx.arc(-7, 0, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = "#9aa4b2";
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // In-flight grapple: cable trailing from the launch point, open claw head
+  // at the tip pointing along the direction of travel.
+  function drawClawProjectile(ctx, pr) {
+    const ox = pr.ox != null ? pr.ox : pr.x, oy = pr.oy != null ? pr.oy : pr.y;
+    drawClawCable(ctx, ox, oy, pr.x, pr.y);
+    const angle = Math.atan2(pr.y - oy, pr.x - ox);
+    drawClawHead(ctx, pr.x, pr.y, angle, 1);
+  }
+
+  // Latched grapple reeling a bomb in: cable from the puller's seat to the
+  // bomb, claw clamped shut on the bomb's near edge, facing into it.
+  function drawClawTether(ctx, anchorX, anchorY, bombX, bombY) {
+    drawClawCable(ctx, anchorX, anchorY, bombX, bombY);
+    const angle = Math.atan2(bombY - anchorY, bombX - anchorX);
+    const gripX = bombX - Math.cos(angle) * (C.BombRadius + 6);
+    const gripY = bombY - Math.sin(angle) * (C.BombRadius + 6);
+    drawClawHead(ctx, gripX, gripY, angle, 0.1);
   }
 
   function drawOverlays(ctx, snap) {
@@ -356,10 +582,12 @@ const Render = (() => {
       ctx.fillText(snap.winnerName ? `${snap.winnerName} WINS!` : "MATCH OVER", cx, cy);
     }
 
-    // Pass UI — only the current holder needs it.
-    if (snap.you && snap.you.isHolder && snap.phase === "playing") {
+    // Pass UI — anyone holding a bomb (real or fake — same UI, same bluff)
+    // needs it.
+    const you = snap.you;
+    if (you && (you.isHolder || you.holdsFake || you.fakePassing) && snap.phase === "playing") {
       ctx.font = "bold 24px sans-serif";
-      if (snap.bomb && snap.bomb.transferring) {
+      if ((you.isHolder && snap.bomb && snap.bomb.transferring) || you.fakePassing) {
         ctx.fillStyle = "#c6cdd6";
         ctx.fillText("PASSING...", cx, C.WorldHeight - 24);
       } else if (snap.you.canPass) {
@@ -387,7 +615,15 @@ const Render = (() => {
     const you = snap.you;
 
     if (you) {
-      dom.coinDisplay.innerHTML = `<span class="coin-icon">💰</span>${you.coins}`;
+      const me = snap.players.find(p => p.id === you.id);
+      const baseRate = C.PassiveCoinAmount / C.PassiveCoinInterval;
+      const bonusRate = C.BombHolderCoinAmount / C.BombHolderCoinInterval;
+      let rate = baseRate, rateColor = "#9aa1ad";
+      if (me && me.earningPenalty) { rate = 0; rateColor = "#ff5d5d"; }
+      else if (me && me.earningBonus) { rate = baseRate + bonusRate; rateColor = "#5dff8a"; }
+      const rateText = `(+${rate.toFixed(1)}/s)`;
+      dom.coinDisplay.innerHTML = `<span class="coin-icon">💰</span>${you.coins}` +
+        ` <span style="font-size:14px;color:${rateColor}">${rateText}</span>`;
       dom.statusLine.textContent = `Alive: ${snap.aliveCount}/${snap.players.length}` +
         (snap.bomb ? `   ·   Bomb started at ${snap.bomb.initialTime}s` : "");
     } else {
@@ -438,9 +674,13 @@ const Render = (() => {
       dom.btnDraw.disabled = !you.alive || you.coins < C.CardDrawCost || !you.hand.includes(null);
       dom.btnDraw.textContent = `Draw Card (R) — ${C.CardDrawCost}c`;
 
-      if (you.isHolder && snap.phase === "playing") {
+      // Fake bombs are passed with the same button/key as the real one; the
+      // UI deliberately can't tell the difference either.
+      const holdsBombNow = you.isHolder || you.holdsFake || you.fakePassing;
+      const bombInFlight = (you.isHolder && snap.bomb && snap.bomb.transferring) || you.fakePassing;
+      if (holdsBombNow && snap.phase === "playing") {
         dom.btnPass.disabled = !you.canPass;
-        dom.btnPass.textContent = (snap.bomb && snap.bomb.transferring) ? "Passing..."
+        dom.btnPass.textContent = bombInFlight ? "Passing..."
           : you.canPass ? "Pass Bomb (Space)" : `Pass Lock ${you.passLock.toFixed(1)}s`;
       } else {
         dom.btnPass.disabled = true;
@@ -485,11 +725,18 @@ const Render = (() => {
       if (!cardId) return false;
       const kind = Cards.TYPES[cardId].kind;
       if (kind === "shield" && !you.isHolder) return false;
-      // Both hands are full holding the bomb — the holder can't wield a
-      // thrown/fired weapon at the same time. Once it's been thrown and is
-      // in flight, their hands are free again.
-      const reallyHolding = you.isHolder && !(snap.bomb && snap.bomb.transferring);
-      if (kind === "projectile" && reallyHolding) return false;
+      // Both hands are full holding a bomb (real or fake) — the holder
+      // can't wield a thrown/fired weapon at the same time. Once it's been
+      // thrown and is in flight, their hands are free again.
+      const handsFull = (you.isHolder && !(snap.bomb && snap.bomb.transferring)) || you.holdsFake;
+      if ((kind === "projectile" || kind === "grapple") && handsFull) return false;
+      if (kind === "fakebomb") {
+        // Needs free hands to pull one out, and the sim also caps total
+        // bombs in play (real + fakes) at the player count.
+        if (handsFull) return false;
+        const bombsInPlay = (snap.bomb ? 1 : 0) + (snap.fakeBombs ? snap.fakeBombs.length : 0);
+        if (bombsInPlay >= snap.players.length) return false;
+      }
       return true;
     };
   }
@@ -503,6 +750,7 @@ const Render = (() => {
     lines.push(`  passLock=${fmt(d.passLockRemaining)}  nextReceiverMinHold=${fmt(d.nextReceiverMinHold)}`);
     lines.push(`order: ${d.passingOrder.join(" → ") || "-"}   next=${d.nextAlive ?? "-"}`);
     lines.push(`projectiles: ${d.projectiles.length ? d.projectiles.map(p => `${p.amount > 0 ? "+" : ""}${p.amount}s@${p.x},${p.y}`).join("  ") : "none"}`);
+    lines.push(`fakes: ${d.fakeBombs && d.fakeBombs.length ? d.fakeBombs.map(f => `${f.holder}${f.to ? "→" + f.to : ""} ${f.remaining.toFixed(1)}s`).join("  ") : "none"}`);
     for (const p of d.players) {
       lines.push(`  ${p.name.padEnd(10)} ${p.state.padEnd(12)} coins=${String(p.coins).padEnd(4)} hand=[${p.hand.join(", ")}]`);
     }

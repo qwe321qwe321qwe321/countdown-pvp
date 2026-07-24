@@ -23,7 +23,7 @@ const CONFIG = {
   // is also invincible — gun/repair hits that land on it during this window
   // are blocked with no time effect, same as Shield (see stepProjectiles).
   SlowBombMultiplier: 0,
-  SlowBombDuration: 4.0,
+  SlowBombDuration: 2.0,
 
   // ---- Shield / Curse / Magnifying Glass ----
   ShieldDuration: 5.0,
@@ -33,27 +33,34 @@ const CONFIG = {
 
   // ---- Coin economy (integers only) ----
   StartingCoins: 0,
-  PassiveCoinInterval: 3.0,
+  PassiveCoinInterval: 1.0,               // natural growth: 1 coin/s
   PassiveCoinAmount: 1,
-  BombHolderCoinInterval: 1.0,
+  BombHolderCoinInterval: 1.0,            // holder bonus stacks on top of passive income: +1 coin/s while holding = 2/s total
   BombHolderCoinAmount: 1,
-  BombHolderCoinDuration: 10.0,           // holder bonus only accrues for this long per hold
+  BombHolderCoinDuration: 10.0,           // grace window per hold; past it the holder earns nothing at all (stalling penalty)
 
   // ---- Cards ----
   CardDrawCost: 5,
   MaxHandSize: 5,
   StartingHand: ["magnify", "gun5"],      // every player begins the match with these, for free
+  // Three tiers: common utility at 10, the stronger swing cards (Freeze
+  // Stopwatch / Grapple Claw / Reinforced Arm) rarer at 6, and Fake Bomb the
+  // rarest of all at 3. Fake Bomb is additionally excluded from draws
+  // entirely while bombs in play are at the cap (see Sim.tryDraw).
   CardDropWeights: {
-    magnify: 10,
+    magnify: 8,
     gun1: 0,
     gun3: 0,
     gun5: 10,
     repair5: 10,
     repair10: 0,
     speedup: 10,
-    slowdown: 10,
+    slowdown: 6,
     shield: 0,
     curse: 0,
+    grapple: 6,
+    reinforced: 6,
+    fakebomb: 3,
   },
 
   // ---- Geometry (world units = canvas pixels) ----
@@ -72,6 +79,31 @@ const CONFIG = {
   MuzzleOffset: 32,                       // spawn distance from body center toward aim
   GunBurstCount: 3,                       // -Time Gun cards can be fired this many separate times per use
   AimLineLength: 520,                     // how far a wielded weapon's sight line reaches
+
+  // ---- Grapple Claw ----
+  GrappleFireSpeed: 2200,                 // fast outbound throw
+  GrappleRetractSpeed: 260,               // normal-speed reel-in once it latches (same order as BombArmMoveSpeed)
+
+  // ---- Reinforced Arm ----
+  ReinforcedArmDuration: 5.0,
+  ReinforcedArmSpeedMult: 2.0,
+
+  // ---- Fake Bomb ----
+  FakeBombMinDuration: 10,
+  FakeBombMaxDuration: 30,
+  FakeBombForcedPassLock: 1.0,            // short cooldown after a forced bounce so nobody instantly re-chains
+  FakeBombRevealDuration: 3.0,            // the decoy's rolled timer is shown privately to its creator this long
+
+  // ---- Explosion visuals ----
+  // Mid-air detonation sequence (presentation only — the kill itself is
+  // decided the instant the timer hits 0): the bomb freezes in place showing
+  // "0.0s" for HoldDuration, then the blast ring expands for CatchUpDuration
+  // until it touches the victim (who only *visually* dies at that moment),
+  // then keeps expanding fast while fading out over FadeDuration.
+  ExplosionHoldDuration: 0.5,             // frozen "0.0s" beat before the blast ring appears
+  ExplosionRingCatchUpDuration: 0.4,      // seconds for the ring to reach the victim
+  ExplosionRingExpandSpeed: 1100,         // world units/sec the ring keeps growing after the hit
+  ExplosionRingFadeDuration: 0.45,        // seconds the post-hit ring takes to fade out
 
   // ---- Bots ----
   BotAimDuration: 0.35,                   // seconds a bot must hold its weapon raised & aimed before it actually fires

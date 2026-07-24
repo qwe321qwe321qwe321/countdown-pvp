@@ -32,7 +32,11 @@ const AI = (() => {
     if (sim.phase !== "playing" || !sim.bomb) return inp;
 
     const b = sim.bomb;
-    const holding = b.holderId === player.id;
+    // A fake decoy in hand is carried/passed exactly like the real bomb, so
+    // the bot treats "holding" identically for both — it hot-potatoes a fake
+    // onward just as urgently, which is exactly what keeps the bluff alive.
+    const heldFake = sim.fakeBombs.find(f => f.holderId === player.id && !f.transfer);
+    const holding = b.holderId === player.id || !!heldFake;
     const bombPos = Sim.bombWorldPos(sim);
     const seat = Sim.seatPosition(player.seat, sim.seatCount);
 
@@ -106,6 +110,7 @@ const AI = (() => {
         const fast = findSlot(player, d => d.kind === "speed" && d.mult > 1);
         const curse = findSlot(player, d => d.kind === "curse");
         const magnify = findSlot(player, d => d.kind === "magnify");
+        const fake = findSlot(player, d => d.kind === "fakebomb");
         if (gun >= 0 && b.shieldRemaining <= 0) {
           brain.aimSlot = gun;
           brain.aimReadyAt = sim.time + C.BotAimDuration + Math.random() * C.BotAimJitter;
@@ -113,6 +118,7 @@ const AI = (() => {
         }
         else if (fast >= 0 && b.speedMult <= 1) inp.use.push(fast);
         else if (curse >= 0 && !b.curseActive) inp.use.push(curse);
+        else if (fake >= 0 && Math.random() < 0.5) inp.use.push(fake); // sim rejects it if the bomb cap is reached; the card just stays in hand
         else if (magnify >= 0 && Math.random() < 0.5) inp.use.push(magnify);
         brain.nextActAt = sim.time + 1.5 + Math.random() * 3;
       }
