@@ -2172,6 +2172,11 @@ const Sim = (() => {
         // fakeBombs below). Only whether it actually pays out on release is
         // ever private, so the number on screen never gives the bluff away.
         pot: b.pot,
+        // In one-time-pot mode, MAX means this hold has already minted its
+        // full allowance even if shots have since stolen some (or all) of it.
+        potMaxed: sim.modes.nonRefillingBombPot
+          ? b.potGenerated >= C.BombHolderPotCap
+          : b.pot >= C.BombHolderPotCap,
       } : null,
       // Fake decoys, rendered with the identical bomb body + holder arms as
       // the real one. Which one is real is never derivable from position,
@@ -2189,6 +2194,9 @@ const Sim = (() => {
           // Same public pot display as the real bomb — a fake accrues and
           // shows an identical number, it just never actually pays out.
           pot: f.pot,
+          potMaxed: sim.modes.nonRefillingBombPot
+            ? f.potGenerated >= C.BombHolderPotCap
+            : f.pot >= C.BombHolderPotCap,
           timerJammed: f.timerJamRemaining > 0,
           publicRemaining: (
             sim.modes.publicSeconds ||

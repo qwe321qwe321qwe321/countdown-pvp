@@ -184,7 +184,7 @@ const Render = (() => {
         ctx.fillText(f.publicRemaining.toFixed(1) + "s", f.x, f.y);
         ctx.textBaseline = "alphabetic";
       }
-      drawPotBadge(ctx, f.x, f.y, f.pot, snap.time);
+      drawPotBadge(ctx, f.x, f.y, f.pot, f.potMaxed, snap.time);
     }
 
     // Arms: body -> hands -> bomb, only for the current holder, and only
@@ -850,7 +850,7 @@ const Render = (() => {
       ctx.fillText(b.publicRemaining.toFixed(1) + "s", b.x, b.y);
       ctx.textBaseline = "alphabetic";
     }
-    drawPotBadge(ctx, b.x, b.y, b.pot, snap.time);
+    drawPotBadge(ctx, b.x, b.y, b.pot, b.potMaxed, snap.time);
   }
 
   function drawJammedTimer(ctx, x, y, time) {
@@ -869,11 +869,11 @@ const Render = (() => {
   // Farmed-pot badge, shown on the bomb itself while it's being held — public
   // to everyone, and drawn identically for a fake decoy (see the fakeBombs
   // loop in draw()) so the number on screen never tells the two apart. Only
-  // whether it actually pays out on release stays private. Once the pot hits
-  // its cap it swaps to a pulsing "MAX" badge so the stop is unmistakable.
-  function drawPotBadge(ctx, x, y, pot, time) {
-    if (!pot) return;
-    const maxed = pot >= C.BombHolderPotCap;
+  // whether it actually pays out on release stays private. MAX means no more
+  // coins can be generated during this hold, so one-time pots keep that label
+  // after enemy shots steal from their current balance.
+  function drawPotBadge(ctx, x, y, pot, maxed, time) {
+    if (!pot && !maxed) return;
     const text = maxed ? `💰${pot} MAX` : `💰${pot}`;
     ctx.font = "bold 13px sans-serif";
     const padX = 6, padY = 3;

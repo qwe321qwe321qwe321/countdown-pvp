@@ -59,7 +59,8 @@ The host lobby also exposes five experimental switches:
   repair-kit throws, and Grapple Claws remain moving projectiles.
 - **One-time $10 bomb pot** limits each hold to generating $10 in total.
   Damaging enemy shots still steal up to $2 from the stored pot, but those
-  stolen coins no longer regenerate before the bomb is passed.
+  stolen coins no longer regenerate before the bomb is passed. The pot keeps
+  its `MAX` label after reaching that limit, even when its balance is stolen.
 
 ## Architecture (host authoritative)
 
