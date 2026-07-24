@@ -25,6 +25,7 @@ host lobby and play solo for testing.
 | Mouse | Holding the bomb: drag your arms. Hold left mouse to taunt, lock arm control/passing, and farm the pot at 2× speed. With free hands: hold/release to charge and launch a slower -3s sling shot. |
 | Space | Pass while holding; on an incoming pass, avoid the punish window and press in the parry window to return it at 1.5× incoming travel speed |
 | 1 / 2 / 3 (or click) | Use the card in that hand slot |
+| 4 (Roguelike Shop) | Pay to reroll all three choices |
 | Q after elimination | Use your one randomly assigned global item for the round |
 
 Cards are bought automatically whenever an alive player has at least `CardDrawCost`
@@ -32,6 +33,18 @@ coins and an empty hand slot. At the start of each bomb/round, the host rolls a 
 by everyone: Magnifying Glass, one attack card, one defense card, and one other
 non-duplicate random card. The right-side codex shows the current round's pool.
 Each player opens with a Magnifying Glass and that opening pool's attack card.
+
+The host lobby also exposes three experimental switches:
+
+- **Public seconds** keeps every lethal/decoy timer visible and removes the
+  Magnifying Glass from starting hands and card rolls.
+- **Double bomb** starts each round with two simultaneous lethal bombs while
+  at least four players remain. Both eliminations belong to the same round;
+  new rounds return to one bomb once only one to three players remain.
+- **Roguelike 3-choice shop** replaces auto-buy/hand storage with three
+  personal choices plus a paid reroll in slot 4. Choosing a card costs
+  `CardDrawCost`; after it is consumed, that slot immediately rolls a new card
+  from every enabled card rather than the round Shop Pool.
 
 ## Architecture (host authoritative)
 

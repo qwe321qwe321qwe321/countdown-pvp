@@ -7,7 +7,7 @@ const Client = (() => {
   //   code, name,
   //   collector,              // local input collector (shared shape with host)
   //   onWelcome(playerId), onReject(reason),
-  //   onLobby(roster, pool, teamCount), onStart(), onSnapshot(snap),
+  //   onLobby(roster, pool, teamCount, modes), onStart(), onSnapshot(snap),
   //   onReturnToLobby(),      // host ended the match and reopened the lobby
   //   onClosed(), onError(err),
   // }
@@ -23,7 +23,7 @@ const Client = (() => {
             startSending();
             break;
           case "reject": opts.onReject(msg.reason); break;
-          case "lobby": opts.onLobby(msg.roster, msg.pool, msg.teamCount); break;
+          case "lobby": opts.onLobby(msg.roster, msg.pool, msg.teamCount, msg.modes || {}); break;
           case "start": opts.onStart(); break;
           case "tolobby": opts.onReturnToLobby && opts.onReturnToLobby(); break;
           case "snap": opts.onSnapshot(msg.snap); break;

@@ -282,6 +282,7 @@
     coinDisplay: $("coinDisplay"),
     statusLine: $("statusLine"),
     hand: $("hand"),
+    handTitle: $("handTitle"),
     aimHint: $("aimHint"),
     btnPass: $("btnPass"),
     autoBuyStatus: $("autoBuyStatus"),
@@ -375,7 +376,13 @@
     const you = latestSnap && latestSnap.you;
     const cardId = you && you.hand[slot];
     if (!cardId) return;
-    if (["projectile", "grapple"].includes(Cards.TYPES[cardId].kind)) {
+    const def = Cards.TYPES[cardId];
+    if (!def) return;
+    const shopMode = !!(latestSnap.modes && latestSnap.modes.roguelikeShop);
+    const cost = def.kind === "reroll" ? CONFIG.ShopRerollCost : CONFIG.CardDrawCost;
+    const alreadyPaid = Array.isArray(you.shopPaidSlots) && you.shopPaidSlots.includes(slot);
+    if (shopMode && you.alive && !alreadyPaid && you.coins < cost) return;
+    if (["projectile", "grapple"].includes(def.kind)) {
       // Both hands are full holding a bomb (real or fake) — the holder
       // can't wield a weapon too. But once it's been thrown and is in
       // flight, their hands are free again even though isHolder hasn't
@@ -519,13 +526,17 @@
         $("shareLink").value = location.origin + location.pathname + "?room=" + code;
       },
       onError: err => { alert("Network error: " + (err && err.type ? err.type : err)); },
-      onLobby: roster => renderSeats($("hostSeatList"), roster),
+      onLobby: (roster, pool, teamCount, modes) => {
+        renderSeats($("hostSeatList"), roster);
+        syncModeChecks(modes);
+      },
       onSnapshot: acceptSnapshot,
     });
     renderSeats($("hostSeatList"), [{ id: "P0", name: playerName(), isBot: false }]);
     $("hostPlayerName").value = playerName();
     buildPoolChecks();
     buildTeamCountSelect();
+    syncModeChecks({ publicSeconds: false, doubleBomb: false, roguelikeShop: false });
   };
 
   $("hostPlayerName").addEventListener("input", () => {
@@ -562,6 +573,27 @@
       label.append(cb, ` ${t}s`);
       wrap.appendChild(label);
     }
+  }
+
+  function selectedModes() {
+    return {
+      publicSeconds: $("modePublicSeconds").checked,
+      doubleBomb: $("modeDoubleBomb").checked,
+      roguelikeShop: $("modeRoguelikeShop").checked,
+    };
+  }
+
+  function syncModeChecks(modes) {
+    if (!modes) return;
+    $("modePublicSeconds").checked = !!modes.publicSeconds;
+    $("modeDoubleBomb").checked = !!modes.doubleBomb;
+    $("modeRoguelikeShop").checked = !!modes.roguelikeShop;
+  }
+
+  for (const id of ["modePublicSeconds", "modeDoubleBomb", "modeRoguelikeShop"]) {
+    $(id).onchange = () => {
+      if (hostSession) hostSession.setModes(selectedModes());
+    };
   }
 
   $("btnCopyLink").onclick = async () => {
@@ -622,9 +654,15 @@
       collector,
       onWelcome: id => { myId = id; $("clientConnectStatus").textContent = ""; },
       onReject: reason => fallbackToJoinScreen("Rejected: " + reason),
-      onLobby: (roster, pool, teamCount) => {
+      onLobby: (roster, pool, teamCount, modes) => {
         renderSeats($("clientSeatList"), roster);
-        $("clientTeamInfo").textContent = teamCount > 1 ? `Team Mode: ${teamCount} Teams` : "Free-for-all";
+        const labels = [
+          teamCount > 1 ? `Team Mode: ${teamCount} Teams` : "Free-for-all",
+        ];
+        if (modes.publicSeconds) labels.push("Public seconds");
+        if (modes.doubleBomb) labels.push("Double bomb");
+        if (modes.roguelikeShop) labels.push("Roguelike shop");
+        $("clientTeamInfo").textContent = labels.join(" · ");
       },
       onStart: enterGame,
       onReturnToLobby: () => show("client-lobby"),

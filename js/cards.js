@@ -41,6 +41,8 @@ const Cards = (() => {
       desc: `Black out the table for ${CONFIG.BlackoutDuration}s. Everyone keeps a small personal vision circle; an active Magnifying Glass also acts as a flashlight.` },
     reverse:    { name: "Reverse", emoji: "🔄", kind: "reverse",
       desc: "Toggle the global bomb-passing direction. Using it twice restores the original order; every new round resets it." },
+    reroll:     { name: "Reroll All", emoji: "🎲", kind: "reroll",
+      desc: "Pay to replace all three Roguelike shop choices." },
   };
 
   // Every bomb/round gets its own four-card draw pool:
@@ -132,5 +134,33 @@ const Cards = (() => {
     return ids[ids.length - 1];
   }
 
-  return { TYPES, ROUND_ATTACK_IDS, ROUND_DEFENSE_IDS, rollRoundPool, rollCard };
+  function enabledCardIds(excludeIds) {
+    return Object.keys(CONFIG.CardDropWeights).filter(id =>
+      CONFIG.CardDropWeights[id] > 0 &&
+      TYPES[id] &&
+      !(excludeIds && excludeIds.includes(id)));
+  }
+
+  // Generic weighted pool used by modes that deliberately bypass the
+  // Magnify/Attack/Defense/Round-Pool structure.
+  function rollAnyPool(count, previousPool, excludeIds) {
+    const result = [];
+    const blocked = new Set(excludeIds || []);
+    for (let i = 0; i < count; i++) {
+      const id = rollCard([...blocked], null);
+      if (!id) break;
+      result.push(id);
+      blocked.add(id);
+    }
+    if (previousPool && result.length > 1 && sameCardSet(result, previousPool)) {
+      const replacement = rollCard([...blocked, ...previousPool.slice(0, -1)], null);
+      if (replacement) result[result.length - 1] = replacement;
+    }
+    return result;
+  }
+
+  return {
+    TYPES, ROUND_ATTACK_IDS, ROUND_DEFENSE_IDS,
+    rollRoundPool, rollAnyPool, rollCard, enabledCardIds,
+  };
 })();

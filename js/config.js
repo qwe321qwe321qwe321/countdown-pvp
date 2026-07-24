@@ -59,6 +59,8 @@ const CONFIG = {
 
   // ---- Cards ----
   CardDrawCost: 5,
+  ShopRerollCost: 5,
+  RoguelikeChoiceCount: 3,
   MaxHandSize: 5,
   StartingHand: ["magnify"],              // the opening round's attack card is added after its pool is rolled
   // Three tiers: common utility at 10, the stronger swing cards (Freeze
@@ -74,7 +76,7 @@ const CONFIG = {
     repair10: 0,
     speedup: 10,
     slowdown: 6,
-    shield: 8,
+    shield: 0,                            // temporarily disabled
     curse: 0,
     grapple: 8,
     reinforced: 6,

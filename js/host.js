@@ -11,7 +11,7 @@ const Host = (() => {
   //   hostName,
   //   localCollector,          // input collector for the host's own player
   //   onReady(code), onError(err),
-  //   onLobby(roster, pool, teamCount),   // fired on any lobby change
+  //   onLobby(roster, pool, teamCount, modes), // fired on any lobby change
   //   onSnapshot(snap),        // host's own per-frame view
   // }
   function createSession(opts) {
@@ -20,6 +20,7 @@ const Host = (() => {
     let nextBotNum = 1;
     let pool = C.DefaultBombTimePool.slice();
     let teamCount = C.DefaultTeamCount;
+    let modes = { publicSeconds: false, doubleBomb: false, roguelikeShop: false };
     let started = false;
     let sim = null;
     let tickTimer = null;
@@ -56,8 +57,9 @@ const Host = (() => {
     }
 
     function lobbyChanged() {
-      opts.onLobby(rosterView(), pool, teamCount);
-      net.broadcast({ type: "lobby", roster: rosterView(), pool, teamCount });
+      const modeView = Object.assign({}, modes);
+      opts.onLobby(rosterView(), pool, teamCount, modeView);
+      net.broadcast({ type: "lobby", roster: rosterView(), pool, teamCount, modes: modeView });
     }
 
     function handleMessage(peerId, msg) {
@@ -139,6 +141,16 @@ const Host = (() => {
       lobbyChanged();
     }
 
+    function setModes(nextModes) {
+      if (started) return;
+      modes = {
+        publicSeconds: !!(nextModes && nextModes.publicSeconds),
+        doubleBomb: !!(nextModes && nextModes.doubleBomb),
+        roguelikeShop: !!(nextModes && nextModes.roguelikeShop),
+      };
+      lobbyChanged();
+    }
+
     function renameSelf(name) {
       if (started) return;
       const p = roster.find(r => r.id === "P0");
@@ -155,7 +167,7 @@ const Host = (() => {
       if (roster.length < 2) return "Need at least 2 players — add a bot?";
       if (pool.length < 1) return "Enable at least one Bomb Time Pool value";
       started = true;
-      sim = Sim.createMatch(rosterView(), pool, teamCount);
+      sim = Sim.createMatch(rosterView(), pool, teamCount, modes);
       for (const r of roster) if (r.isBot) bots.set(r.id, AI.createBrain());
       net.broadcast({ type: "start" });
       lastTick = performance.now();
@@ -252,8 +264,9 @@ const Host = (() => {
     }
 
     return {
-      addBot, removeBot, setPool, setTeamCount, renameSelf, start, rematch, toLobby, destroy,
+      addBot, removeBot, setPool, setTeamCount, setModes, renameSelf, start, rematch, toLobby, destroy,
       getPool: () => pool.slice(), getTeamCount: () => teamCount,
+      getModes: () => Object.assign({}, modes),
     };
   }
 

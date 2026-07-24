@@ -95,10 +95,15 @@ const Sim = (() => {
   // bomb is in flight; protection depends only on whether the bomb is inside.
   function shieldCoversBomb(sim) {
     const b = sim.bomb;
-    if (!b || b.shieldRemaining <= 0) return false;
+    return !!b && shieldCoversPos(sim, bombWorldPos(sim));
+  }
+
+  function shieldCoversPos(sim, pos) {
+    const b = sim.bomb;
+    if (!b || !pos || b.shieldRemaining <= 0) return false;
     const owner = getPlayer(sim, b.shieldOwnerId);
     if (!owner) return false;
-    return dist(bombWorldPos(sim), seatPosition(owner.seat, sim.seatCount)) <=
+    return dist(pos, seatPosition(owner.seat, sim.seatCount)) <=
       C.BombArmReach + C.BombRadius;
   }
 
@@ -160,9 +165,13 @@ const Sim = (() => {
   // Fixed-size hand: null marks an empty slot. Using/discarding a card clears
   // its slot in place rather than shifting later cards down, so a card's
   // position never moves just because an earlier one was used.
-  function freshHand() {
+  function freshHand(modes) {
     const h = new Array(C.MaxHandSize).fill(null);
-    C.StartingHand.forEach((id, i) => { h[i] = id; });
+    if (!(modes && modes.roguelikeShop)) {
+      C.StartingHand
+        .filter(id => !(modes && modes.publicSeconds && id === "magnify"))
+        .forEach((id, i) => { h[i] = id; });
+    }
     return h;
   }
 
@@ -191,13 +200,19 @@ const Sim = (() => {
     return teams;
   }
 
-  function createMatch(roster, bombTimePool, teamCount) {
+  function createMatch(roster, bombTimePool, teamCount, requestedModes) {
     const seats = shuffledSeats(roster.length);
     const tc = Math.max(1, Math.min(teamCount || 1, roster.length));
     const teams = assignTeams(roster.length, tc);
+    const modes = {
+      publicSeconds: !!(requestedModes && requestedModes.publicSeconds),
+      doubleBomb: !!(requestedModes && requestedModes.doubleBomb),
+      roguelikeShop: !!(requestedModes && requestedModes.roguelikeShop),
+    };
     const sim = {
       seatCount: roster.length,
       teamCount: tc,
+      modes,
       bombTimePool: bombTimePool.slice(),
       roundNumber: 0,
       roundCardPool: [],
@@ -211,8 +226,9 @@ const Sim = (() => {
         disconnected: false,
         alive: true,
         coins: C.StartingCoins,
-        hand: freshHand(),  // fixed-size; card type ids or null for empty slots
+        hand: freshHand(modes),  // fixed-size; card type ids or null for empty slots
         handSlotVersions: new Array(C.MaxHandSize).fill(0),
+        shopPaidSlots: new Set(),
         autoBuyInputLocks: new Set(), // refilled slots require the old use/fire input to be released
         resolvedParryIds: new Set(),  // deduplicates locally judged results for exact transfers
         passLock: 0,
@@ -274,23 +290,31 @@ const Sim = (() => {
   // temporary state. Alive players keep coins and cards across bombs.
   function spawnBomb(sim) {
     sim.roundNumber++;
-    // Reverse is too swingy in a two-player duel, so it is omitted from the
-    // round shop pool for 1v1 matches (it remains available in larger games).
-    sim.roundCardPool = Cards.rollRoundPool(sim.roundCardPool,
-      sim.players.length === 2 ? ["reverse"] : null, sim.seenRoundCardIds);
+    const poolBans = [];
+    if (sim.players.length === 2) poolBans.push("reverse");
+    if (sim.modes.publicSeconds) poolBans.push("magnify");
+    sim.roundCardPool = sim.modes.roguelikeShop
+      ? Cards.enabledCardIds(sim.modes.publicSeconds ? ["magnify"] : null)
+      : sim.modes.publicSeconds
+        ? Cards.rollAnyPool(4, sim.roundCardPool, poolBans)
+        : Cards.rollRoundPool(sim.roundCardPool,
+          poolBans.length ? poolBans : null, sim.seenRoundCardIds);
     for (const id of sim.roundCardPool) {
       if (!sim.seenRoundCardIds.includes(id)) sim.seenRoundCardIds.push(id);
     }
     // Opening loadout: Magnifying Glass from StartingHand plus this opening
     // pool's attack slot. This keeps the free weapon aligned with the round
     // instead of always handing everyone the -5s Gun.
-    if (sim.roundNumber === 1) {
+    if (sim.roundNumber === 1 && !sim.modes.roguelikeShop) {
       const openingAttack = sim.roundCardPool[1];
       for (const p of sim.players) {
         if (!p.alive || !openingAttack) continue;
         const slot = p.hand.indexOf(null);
         if (slot >= 0) p.hand[slot] = openingAttack;
       }
+    }
+    if (sim.modes.roguelikeShop && sim.roundNumber === 1) {
+      for (const p of sim.players) refillAllShopChoices(sim, p, false);
     }
     const pool = sim.bombTimePool;
     const t = pool[Math.floor(Math.random() * pool.length)];
@@ -319,6 +343,37 @@ const Sim = (() => {
     };
     sim.projectiles = [];
     sim.fakeBombs = [];
+    if (sim.modes.doubleBomb && alive.length >= 4) {
+      const candidates = alive.filter(p => !target || p.id !== target.id);
+      const secondTarget = candidates[Math.floor(Math.random() * candidates.length)] || target;
+      const secondTime = pool[Math.floor(Math.random() * pool.length)];
+      const secondToPos = secondTarget
+        ? seatPosition(secondTarget.seat, sim.seatCount) : fromPos;
+      sim.fakeBombs.push({
+        id: sim.nextFakeId++,
+        lethal: true,
+        initialTime: secondTime,
+        remaining: secondTime,
+        holderId: null,
+        offset: { x: 0, y: 0 },
+        speedMult: 1,
+        speedRemaining: 0,
+        shieldRemaining: 0,
+        shieldOwnerId: null,
+        curseActive: false,
+        pot: 0,
+        transfer: secondTarget
+          ? {
+              fromId: null, toId: secondTarget.id, elapsed: 0,
+              duration: travelWindow, fromPos: { x: CENTER.x, y: CENTER.y },
+              toPos: secondToPos,
+            }
+          : null,
+        revealTo: null,
+        revealRemaining: 0,
+      });
+      addEvent(sim, `DOUBLE BOMB: ${t}s + ${secondTime}s`);
+    }
     sim.recentParryArrivals = [];
     sim.effects = [];
     sim.explosionAt = null;
@@ -341,6 +396,10 @@ const Sim = (() => {
       p.deadWeaponCharging = false;
       p.taunting = false;
       p.resolvedParryIds.clear();
+      if (sim.modes.roguelikeShop && p.alive) {
+        for (const slot of [...p.shopPaidSlots]) refillShopChoice(sim, p, slot, false);
+      }
+      p.shopPaidSlots.clear();
       // Eliminated players get a fresh ghost item each round, sitting right
       // in hand slot 1 like any other card — usable via the normal card UI.
       if (!p.alive) p.hand[0] = rollDeadGlobalItem();
@@ -362,9 +421,10 @@ const Sim = (() => {
     for (const p of sim.players) {
       p.alive = !p.disconnected;
       p.coins = C.StartingCoins;
-      p.hand = freshHand();
+      p.hand = freshHand(sim.modes);
       p.handSlotVersions = new Array(C.MaxHandSize).fill(0);
       p.autoBuyInputLocks.clear();
+      p.shopPaidSlots.clear();
       p.resolvedParryIds.clear();
       p.passLock = 0;
       p.passiveAcc = 0;
@@ -387,6 +447,7 @@ const Sim = (() => {
     sim.roundCardPool = [];
     sim.seenRoundCardIds = [];
     sim.recentParryArrivals = [];
+    sim.fakeBombs = [];
     // Back to a clean opening: reveal phase, bomb travelling in from center.
     // Works whether the rematch was fired at match-over or mid-round.
     sim.phase = "reveal";
@@ -651,6 +712,7 @@ const Sim = (() => {
     player.hand = new Array(C.MaxHandSize).fill(null);
     player.handSlotVersions = new Array(C.MaxHandSize).fill(0);
     player.autoBuyInputLocks.clear();
+    player.shopPaidSlots.clear();
     player.revealRemaining = 0;
     player.gunPending = null;
     player.equippedSlot = null;
@@ -668,9 +730,10 @@ const Sim = (() => {
       sim.bomb.shieldRemaining = 0;
       sim.bomb.shieldOwnerId = null;
     }
-    // A decoy in a dead player's hands vanishes with them; one they already
-    // passed away is mid-flight and settles on arrival as usual.
-    sim.fakeBombs = sim.fakeBombs.filter(f => f.transfer || f.holderId !== player.id);
+    // Ordinary decoys vanish in a dead player's hands. A second lethal bomb
+    // must survive the first elimination and is forwarded below.
+    sim.fakeBombs = sim.fakeBombs.filter(f =>
+      f.lethal || f.transfer || f.holderId !== player.id);
   }
 
   // Who dies when the bomb reaches 0: normally the current holder (they are
@@ -679,11 +742,9 @@ const Sim = (() => {
   // is out in open space and the victim is whichever alive player is
   // physically nearest to it right now — not necessarily whoever it was
   // headed toward.
-  function explode(sim) {
-    const b = sim.bomb;
+  function bombVictim(sim, b, pos) {
     let victim;
     if (b.transfer) {
-      const pos = bombWorldPos(sim);
       let best = null, bestDist = Infinity;
       for (const p of sim.players) {
         if (!p.alive) continue;
@@ -694,7 +755,28 @@ const Sim = (() => {
     } else {
       victim = getPlayer(sim, b.holderId);
     }
-    sim.explosionAt = bombWorldPos(sim);
+    return victim;
+  }
+
+  function moveLethalBombsOffDeadPlayer(sim, player, explodingBomb) {
+    const next = nextAliveFrom(sim, player.seat);
+    if (!next) return;
+    if (sim.bomb && sim.bomb !== explodingBomb &&
+        sim.bomb.holderId === player.id && !sim.bomb.transfer) {
+      giveBomb(sim, next);
+      addEvent(sim, `The other bomb moved to ${next.name}`);
+    }
+    for (const f of sim.fakeBombs) {
+      if (!f.lethal || f === explodingBomb || f.transfer || f.holderId !== player.id) continue;
+      startFakeTransfer(sim, f, fakeWorldPos(sim, f), next, player.id);
+      addEvent(sim, `The other bomb moved to ${next.name}`);
+    }
+  }
+
+  function beginLethalExplosion(sim, b, isPrimary) {
+    const pos = isPrimary ? bombWorldPos(sim) : fakeWorldPos(sim, b);
+    const victim = bombVictim(sim, b, pos);
+    sim.explosionAt = pos;
     sim.explosionVictimPos = victim ? seatPosition(victim.seat, sim.seatCount) : null;
     sim.explosionVictimId = victim ? victim.id : null;
     // Mid-air blast gets the staged presentation (freeze at 0s -> ring
@@ -705,7 +787,9 @@ const Sim = (() => {
       eliminate(sim, victim);
       addEvent(sim, `BOOM! ${victim.name} was eliminated`);
     }
-    sim.bomb = null;
+    if (isPrimary) sim.bomb = null;
+    else sim.fakeBombs = sim.fakeBombs.filter(f => f !== b);
+    if (victim) moveLethalBombsOffDeadPlayer(sim, victim, b);
     sim.projectiles = [];
     // A lethal blast immediately lights the whole table again so its staged
     // explosion and elimination are visible to every player.
@@ -713,6 +797,30 @@ const Sim = (() => {
     sim.blackoutElapsed = 0;
     sim.phase = "exploding";
     sim.phaseTimer = C.ExplosionTransitionDuration;
+  }
+
+  function explode(sim) {
+    if (sim.bomb) beginLethalExplosion(sim, sim.bomb, true);
+  }
+
+  function promoteLethalSecondary(sim) {
+    const i = sim.fakeBombs.findIndex(f => f.lethal);
+    if (i < 0) return false;
+    const f = sim.fakeBombs.splice(i, 1)[0];
+    sim.bomb = {
+      initialTime: f.initialTime,
+      remaining: f.remaining,
+      holderId: f.holderId,
+      offset: f.offset,
+      speedMult: f.speedMult == null ? 1 : f.speedMult,
+      speedRemaining: f.speedRemaining || 0,
+      shieldRemaining: f.shieldRemaining || 0,
+      shieldOwnerId: f.shieldOwnerId || null,
+      curseActive: !!f.curseActive,
+      pot: f.pot || 0,
+      transfer: f.transfer,
+    };
+    return true;
   }
 
   // A player left mid-session. Treat as eliminated; if they held the bomb it
@@ -757,11 +865,65 @@ const Sim = (() => {
 
   // ---- Cards ---------------------------------------------------------------
 
+  function shopChoiceBans(sim, p, slot) {
+    const bans = [];
+    if (sim.modes.publicSeconds) bans.push("magnify");
+    for (let i = 0; i < C.RoguelikeChoiceCount; i++) {
+      if (i !== slot && p.hand[i]) bans.push(p.hand[i]);
+    }
+    const bombsInPlay = (sim.bomb ? 1 : 0) + sim.fakeBombs.length;
+    if (bombsInPlay >= sim.players.length) bans.push("fakebomb");
+    return bans;
+  }
+
+  function refillShopChoice(sim, p, slot, lockInput) {
+    if (!sim.modes.roguelikeShop || slot < 0 || slot >= C.RoguelikeChoiceCount) return;
+    p.hand[slot] = Cards.rollCard(shopChoiceBans(sim, p, slot), null);
+    p.handSlotVersions[slot]++;
+    p.shopPaidSlots.delete(slot);
+    if (lockInput) p.autoBuyInputLocks.add(slot);
+  }
+
+  function refillAllShopChoices(sim, p, lockInput) {
+    if (!sim.modes.roguelikeShop || !p.alive) return;
+    for (let i = 0; i < C.RoguelikeChoiceCount; i++) p.hand[i] = null;
+    for (let i = 0; i < C.RoguelikeChoiceCount; i++) refillShopChoice(sim, p, i, lockInput);
+    p.hand[C.RoguelikeChoiceCount] = "reroll";
+    p.handSlotVersions[C.RoguelikeChoiceCount]++;
+    for (let i = C.RoguelikeChoiceCount + 1; i < C.MaxHandSize; i++) p.hand[i] = null;
+  }
+
+  function payForShopChoice(sim, p, slot) {
+    if (!sim.modes.roguelikeShop || !p.alive) return true;
+    if (p.shopPaidSlots.has(slot)) return true;
+    if (p.coins < C.CardDrawCost) return false;
+    p.coins -= C.CardDrawCost;
+    p.shopPaidSlots.add(slot);
+    return true;
+  }
+
+  function consumeCard(sim, p, slot) {
+    p.hand[slot] = null;
+    p.handSlotVersions[slot]++;
+    if (sim.modes.roguelikeShop && p.alive && slot < C.RoguelikeChoiceCount) {
+      refillShopChoice(sim, p, slot, true);
+    }
+  }
+
+  function rerollShop(sim, p) {
+    if (!sim.modes.roguelikeShop || !p.alive || p.coins < C.ShopRerollCost) return;
+    p.coins -= C.ShopRerollCost;
+    p.gunPending = null;
+    p.shopPaidSlots.clear();
+    refillAllShopChoices(sim, p, true);
+    addEvent(sim, `${p.name} rerolled all three choices`);
+  }
+
   // Coins are spent automatically as soon as an alive player can afford a
   // card and has an empty hand slot. A large payout may buy several cards in
   // one tick; the host still rolls every result authoritatively.
   function autoBuyCards(sim, p) {
-    if (!p.alive) return;
+    if (!p.alive || sim.modes.roguelikeShop) return;
     while (p.coins >= C.CardDrawCost) {
       const slot = p.hand.indexOf(null);
       if (slot === -1) return;
@@ -785,8 +947,10 @@ const Sim = (() => {
   function discardCard(sim, p, slot) {
     const cardId = p.hand[slot];
     if (!cardId) return;
+    if (sim.modes.roguelikeShop && !p.shopPaidSlots.has(slot)) return;
     if (p.gunPending && p.gunPending.slot === slot) p.gunPending = null;
-    p.hand[slot] = null;
+    consumeCard(sim, p, slot);
+    p.shopPaidSlots.delete(slot);
     addEvent(sim, `${p.name} discarded ${Cards.TYPES[cardId].name}`);
   }
 
@@ -794,8 +958,14 @@ const Sim = (() => {
     const cardId = p.hand[slot];
     if (!cardId) return;
     const def = Cards.TYPES[cardId];
+    if (!def) return;
+    if (def.kind === "reroll") {
+      rerollShop(sim, p);
+      return;
+    }
     const b = sim.bomb;
-    const consume = () => { p.hand[slot] = null; };
+    const consume = () => consumeCard(sim, p, slot);
+    const pay = () => payForShopChoice(sim, p, slot);
 
     switch (def.kind) {
       case "magnify":
@@ -803,12 +973,14 @@ const Sim = (() => {
         // keep their box-cast (see magnifyCovers) over the bomb to actually
         // see the number, computed fresh every tick in buildSnapshot. Only
         // this player's snapshot can ever carry the exact time.
+        if (sim.modes.publicSeconds || !pay()) return;
         p.revealRemaining = C.RevealDuration;
         consume();
         addEvent(sim, `${p.name} used a Magnifying Glass`);
         break;
 
       case "speed": {
+        if (!pay()) return;
         activateGlobalEffect(sim, cardId, p);
         consume();
         break;
@@ -817,6 +989,7 @@ const Sim = (() => {
       case "shield":
         // Any living player can raise their personal bubble, regardless of
         // who is holding the bomb or whether it is currently in flight.
+        if (!pay()) return;
         b.shieldRemaining = C.ShieldDuration;
         b.shieldOwnerId = p.id;
         consume();
@@ -825,6 +998,7 @@ const Sim = (() => {
         break;
 
       case "curse":
+        if (!pay()) return;
         b.curseActive = true;
         consume();
         addEvent(sim, `CURSE ACTIVATED (${p.name})`);
@@ -843,6 +1017,7 @@ const Sim = (() => {
         if (def.amount < 0) {
           fireGunRound(sim, p, slot);
         } else {
+          if (!pay()) return;
           fireProjectile(sim, p, def.amount);
           consume();
           addEvent(sim, `${p.name} used ${def.name}`);
@@ -855,12 +1030,14 @@ const Sim = (() => {
         // literally on a bomb (real or fake). Once thrown it's in flight
         // and hands are free again even before ownership formally changes.
         if (holdsAnyBomb(sim, p)) return;
+        if (!pay()) return;
         fireClaw(sim, p);
         consume();
         addEvent(sim, `${p.name} fired a Grapple Claw`);
         break;
 
       case "reinforced":
+        if (!pay()) return;
         p.armBuffRemaining = C.ReinforcedArmDuration;
         consume();
         addEvent(sim, `${p.name} equipped a Reinforced Arm — aim at any player and press SPACE!`);
@@ -874,6 +1051,7 @@ const Sim = (() => {
         if (holdsAnyBomb(sim, p)) return;
         const bombsInPlay = (b ? 1 : 0) + sim.fakeBombs.length;
         if (bombsInPlay >= sim.players.length) return;
+        if (!pay()) return;
         sim.fakeBombs.push({
           id: sim.nextFakeId++,
           remaining: C.FakeBombMinDuration +
@@ -900,6 +1078,7 @@ const Sim = (() => {
 
       case "blackout":
       case "reverse":
+        if (!pay()) return;
         activateGlobalEffect(sim, cardId, p);
         consume();
         break;
@@ -912,6 +1091,11 @@ const Sim = (() => {
     if (def.kind === "speed") {
       sim.bomb.speedMult = def.mult;
       sim.bomb.speedRemaining = def.duration;
+      for (const f of sim.fakeBombs) {
+        if (!f.lethal) continue;
+        f.speedMult = def.mult;
+        f.speedRemaining = def.duration;
+      }
       const msg = def.mult === 0 ? `TIME FROZEN${who}` : `SPEED x${def.mult}${who}`;
       addEvent(sim, msg, ...posArgs(bombWorldPos(sim)));
     } else if (def.kind === "blackout") {
@@ -934,6 +1118,7 @@ const Sim = (() => {
     const cardId = p.hand[slot];
     const def = cardId && Cards.TYPES[cardId];
     if (!def || def.kind !== "projectile" || def.amount >= 0 || holdsAnyBomb(sim, p)) return false;
+    if (!payForShopChoice(sim, p, slot)) return false;
 
     let pending = p.gunPending;
     if (!pending || pending.cardId !== cardId || pending.slot !== slot) {
@@ -956,7 +1141,7 @@ const Sim = (() => {
     addEvent(sim, `${p.name} fired ${def.name}`);
     if (pending.shotsLeft <= 0) {
       p.gunPending = null;
-      p.hand[slot] = null;
+      consumeCard(sim, p, slot);
     }
     return true;
   }
@@ -1184,6 +1369,7 @@ const Sim = (() => {
         sim.phaseTimer -= dt;
         maintainHands(sim, inputs);
         advanceBombTransfer(sim, dt);
+        stepFakeBombs(sim, dt, false);
         if (sim.phaseTimer <= 0) {
           sim.phase = "countdown";
           sim.phaseTimer = C.CountdownSeconds;
@@ -1194,6 +1380,7 @@ const Sim = (() => {
         sim.phaseTimer -= dt;
         maintainHands(sim, inputs);
         advanceBombTransfer(sim, dt);
+        stepFakeBombs(sim, dt, false);
         if (sim.phaseTimer <= 0) {
           // Countdown over: timer goes hidden, gameplay starts. The initial
           // holder should already have the bomb from its travel-in transfer;
@@ -1220,7 +1407,19 @@ const Sim = (() => {
         sim.phaseTimer -= dt;
         if (sim.phaseTimer <= 0) {
           checkWin(sim);
-          if (sim.phase !== "matchover") spawnBomb(sim);
+          if (sim.phase !== "matchover") {
+            if (!sim.bomb) promoteLethalSecondary(sim);
+            if (sim.bomb) {
+              sim.phase = "playing";
+              sim.explosionAt = null;
+              sim.explosionVictimPos = null;
+              sim.explosionVictimId = null;
+              sim.explosionMidAir = false;
+              addEvent(sim, "The other bomb is still live!");
+            } else {
+              spawnBomb(sim);
+            }
+          }
         }
         break;
 
@@ -1346,8 +1545,15 @@ const Sim = (() => {
 
       // Cosmetic only: which hand slot (if any) this player is currently
       // aiming, so everyone can see they're wielding a thrown/fired weapon.
-      p.equippedSlot = (typeof inp.equip === "number" && p.hand[inp.equip] &&
-        ["projectile", "grapple"].includes(Cards.TYPES[p.hand[inp.equip]].kind)) ? inp.equip : null;
+      const requestedEquip = (typeof inp.equip === "number" && p.hand[inp.equip] &&
+        ["projectile", "grapple"].includes(Cards.TYPES[p.hand[inp.equip]].kind))
+        ? inp.equip : null;
+      // In Roguelike mode, choosing an aimed card is the purchase action:
+      // charge immediately on button/hotkey selection, then keep that paid
+      // choice armed until it is fired/consumed (canceling never charges twice).
+      p.equippedSlot = requestedEquip != null &&
+        !p.autoBuyInputLocks.has(requestedEquip) &&
+        payForShopChoice(sim, p, requestedEquip) ? requestedEquip : null;
 
       // Passive income for everyone alive is the universal baseline. The
       // holder bonus ("farming") is no longer paid to the carrier while they
@@ -1432,7 +1638,7 @@ const Sim = (() => {
       autoBuyCards(sim, p);
     }
 
-    stepFakeBombs(sim, dt);
+    if (stepFakeBombs(sim, dt, true)) return;
     stepProjectiles(sim, dt);
 
     if (b.remaining <= 0) explode(sim);
@@ -1483,7 +1689,7 @@ const Sim = (() => {
         // stays silent about it — announcing the payout would reveal which
         // bomb was the decoy — but the thrower gets a private "+N" cue
         // (see the `you.payout` snapshot field) visible only to themselves.
-        if (bombLike === sim.bomb && bombLike.pot > 0) {
+        if ((bombLike === sim.bomb || bombLike.lethal) && bombLike.pot > 0) {
           p.coins += bombLike.pot;
           p.lastPayoutAmount = bombLike.pot;
           p.lastPayoutSourceX = fromPos.x;
@@ -1523,12 +1729,25 @@ const Sim = (() => {
       : reveal, pos.x, pos.y);
   }
 
-  function stepFakeBombs(sim, dt) {
+  function stepFakeBombs(sim, dt, countDown) {
     const survivors = [];
-    for (const f of sim.fakeBombs) {
-      f.remaining -= dt;
+    for (let index = 0; index < sim.fakeBombs.length; index++) {
+      const f = sim.fakeBombs[index];
+      if (countDown !== false && f.lethal && f.speedRemaining > 0) {
+        f.speedRemaining -= dt;
+        if (f.speedRemaining <= 0) {
+          f.speedMult = 1;
+          f.speedRemaining = 0;
+        }
+      }
+      if (countDown !== false) f.remaining -= dt * (f.speedMult == null ? 1 : f.speedMult);
       if (f.revealRemaining > 0) f.revealRemaining = Math.max(0, f.revealRemaining - dt);
       if (f.remaining <= 0) {
+        if (f.lethal) {
+          sim.fakeBombs = survivors.concat(sim.fakeBombs.slice(index));
+          beginLethalExplosion(sim, f, false);
+          return true;
+        }
         const pos = fakeWorldPos(sim, f);
         const holder = !f.transfer ? getPlayer(sim, f.holderId) : null;
         popFakeBomb(sim, f, pos, holder);
@@ -1587,6 +1806,7 @@ const Sim = (() => {
       survivors.push(f);
     }
     sim.fakeBombs = survivors;
+    return false;
   }
 
   // Launch a fake bomb toward a seat at normal pass speed. holderId mirrors
@@ -1663,6 +1883,7 @@ const Sim = (() => {
       time: sim.time,
       seatCount: sim.seatCount,
       teamCount: sim.teamCount,
+      modes: Object.assign({}, sim.modes),
       roundNumber: sim.roundNumber,
       roundCardPool: sim.roundCardPool.slice(),
       reversePassing: sim.reversePassing,
@@ -1700,7 +1921,8 @@ const Sim = (() => {
         clawY: b.transfer && b.transfer.claw ? b.transfer.toPos.y : null,
         // Public reveal window: everyone can see the exact remaining time for
         // the first few real seconds of a bomb, then it goes hidden as usual.
-        publicRemaining: (sim.phase === "playing" && sim.playElapsed < C.PublicTimeRevealDuration)
+        publicRemaining: (sim.phase === "playing" &&
+            (sim.modes.publicSeconds || sim.playElapsed < C.PublicTimeRevealDuration))
           ? b.remaining : null,
         // The farmed pot itself is public — everyone watching the bomb sees
         // it grow while it's held, same as a fake's identical pot (see
@@ -1724,6 +1946,14 @@ const Sim = (() => {
           // Same public pot display as the real bomb — a fake accrues and
           // shows an identical number, it just never actually pays out.
           pot: f.pot,
+          publicRemaining: (
+            sim.modes.publicSeconds ||
+            (f.lethal && (
+              sim.phase === "reveal" ||
+              sim.phase === "countdown" ||
+              (sim.phase === "playing" && sim.playElapsed < C.PublicTimeRevealDuration)
+            ))
+          ) ? f.remaining : null,
           // Per-viewer private read of the decoy's timer. Its visibility
           // mirrors the real bomb: the creator's initial peek, a living
           // player's active Magnifying Glass, or an eliminated viewer who
@@ -1732,7 +1962,8 @@ const Sim = (() => {
             (f.revealTo === viewerId && f.revealRemaining > 0) ||
             (viewer && sim.phase === "playing" &&
               (!viewer.alive ||
-                (viewer.revealRemaining > 0 && magnifyCoversPos(sim, viewer, pos))))
+                (!shieldCoversPos(sim, pos) && viewer.revealRemaining > 0 &&
+                  magnifyCoversPos(sim, viewer, pos))))
           ) ? f.remaining : null,
         };
       }),
@@ -1787,6 +2018,7 @@ const Sim = (() => {
         coins: viewer.coins,
         hand: viewer.hand.slice(),
         handSlotVersions: viewer.handSlotVersions.slice(),
+        shopPaidSlots: [...viewer.shopPaidSlots],
         isHolder: !!(b && b.holderId === viewerId),
         // Fake-bomb mirror of isHolder, split into "in my hands right now"
         // and "my throw is still in flight" so the local UI (pass button,
@@ -1814,7 +2046,7 @@ const Sim = (() => {
           ((b && !b.transfer && b.holderId === viewerId) || fakeHeldBy(sim, viewerId))),
         // Eliminated players always see the exact bomb timer. Living players
         // still need an active Magnifying Glass covering the bomb.
-        reveal: (b && sim.phase === "playing" &&
+        reveal: (!sim.modes.publicSeconds && b && sim.phase === "playing" &&
             (!viewer.alive ||
               (!shieldCoversBomb(sim) && viewer.revealRemaining > 0 &&
                 magnifyCoversPos(sim, viewer, bombPos))))

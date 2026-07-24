@@ -173,6 +173,13 @@ const Render = (() => {
         ctx.fillStyle = "#ffe27a";
         ctx.fillText(f.privateRemaining.toFixed(1) + "s", f.x, f.y);
         ctx.textBaseline = "alphabetic";
+      } else if (f.publicRemaining != null) {
+        ctx.font = "bold 17px monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#f4f4f4";
+        ctx.fillText(f.publicRemaining.toFixed(1) + "s", f.x, f.y);
+        ctx.textBaseline = "alphabetic";
       }
       drawPotBadge(ctx, f.x, f.y, f.pot, snap.time);
     }
@@ -1167,10 +1174,13 @@ const Render = (() => {
     // a static list of every card in the game. Pool order carries its role:
     // fixed Magnifying Glass, attack roll, defense roll, unrestricted roll.
     const roundIds = snap.roundCardPool || [];
-    const codexSig = JSON.stringify([snap.roundNumber, roundIds]);
+    const shopMode = !!(snap.modes && snap.modes.roguelikeShop);
+    const codexSig = JSON.stringify([snap.roundNumber, roundIds, shopMode]);
     if (dom.cardCodex && codexSig !== lastCodexSig) {
       lastCodexSig = codexSig;
-      if (dom.codexTitle) dom.codexTitle.textContent = `Round ${snap.roundNumber} Shop Pool`;
+      if (dom.codexTitle) dom.codexTitle.textContent = shopMode
+        ? "Full Card Pool"
+        : `Round ${snap.roundNumber} Shop Pool`;
       dom.cardCodex.innerHTML = "";
       const roleNames = ["FIXED", "ATTACK", "DEFENSE", "RANDOM"];
       for (let i = 0; i < roundIds.length; i++) {
@@ -1184,7 +1194,7 @@ const Render = (() => {
         const body = document.createElement("div");
         const tag = document.createElement("div");
         tag.className = `codexTag codexTag${i}`;
-        tag.textContent = roleNames[i] || "RANDOM";
+        tag.textContent = shopMode ? "AVAILABLE" : (roleNames[i] || "RANDOM");
         const name = document.createElement("div");
         name.className = "codexName";
         name.textContent = def.name;
@@ -1198,6 +1208,9 @@ const Render = (() => {
     }
 
     if (you) {
+      if (dom.handTitle) dom.handTitle.textContent = shopMode
+        ? `Choose & use (${C.CardDrawCost}c each · 1-3) or reroll (${C.ShopRerollCost}c · 4)`
+        : "Hand (1-5 or click)";
       // Mirrors Sim.coinIntervalScale: scale by the *current* alive count, not
       // the fixed seat count, so the shown rate speeds up as players die.
       const coinScale = Math.max(1, snap.aliveCount) / C.CoinEconomyBaselinePlayers;
@@ -1240,11 +1253,14 @@ const Render = (() => {
     // Hand slots (rebuild only when contents/usability/armed state changes).
     if (you) {
       const usable = slotUsable(snap);
-      const sig = JSON.stringify([you.hand, you.hand.map((_, i) => usable(i)), hooks.armedSlot]);
+      const sig = JSON.stringify([
+        you.hand, you.shopPaidSlots, you.hand.map((_, i) => usable(i)), hooks.armedSlot,
+      ]);
       if (sig !== lastHandSig) {
         lastHandSig = sig;
         dom.hand.innerHTML = "";
-        for (let i = 0; i < C.MaxHandSize; i++) {
+        const visibleSlots = shopMode ? C.RoguelikeChoiceCount + 1 : C.MaxHandSize;
+        for (let i = 0; i < visibleSlots; i++) {
           const row = document.createElement("div");
           row.className = "cardRow";
           const cardId = you.hand[i];
@@ -1253,7 +1269,11 @@ const Render = (() => {
           useBtn.className = "useBtn";
           if (cardId) {
             const def = Cards.TYPES[cardId];
-            useBtn.innerHTML = `<span class="cardEmoji">${def.emoji}</span><span class="cardLabel">${i + 1}. ${def.name}</span>`;
+            const paid = Array.isArray(you.shopPaidSlots) && you.shopPaidSlots.includes(i);
+            const price = shopMode
+              ? (paid ? " · PAID" : ` · ${def.kind === "reroll" ? C.ShopRerollCost : C.CardDrawCost}c`)
+              : "";
+            useBtn.innerHTML = `<span class="cardEmoji">${def.emoji}</span><span class="cardLabel">${i + 1}. ${def.name}${price}</span>`;
             useBtn.disabled = !usable(i);
             if (hooks.armedSlot === i) useBtn.classList.add("armed");
             useBtn.onclick = () => hooks.useCard(i);
@@ -1263,13 +1283,15 @@ const Render = (() => {
           }
           row.appendChild(useBtn);
 
-          const discardBtn = document.createElement("button");
-          discardBtn.className = "discardBtn";
-          discardBtn.textContent = "✕";
-          discardBtn.title = "Discard without using";
-          discardBtn.disabled = !cardId || !you.alive;
-          discardBtn.onclick = () => hooks.discardCard(i);
-          row.appendChild(discardBtn);
+          if (!shopMode) {
+            const discardBtn = document.createElement("button");
+            discardBtn.className = "discardBtn";
+            discardBtn.textContent = "✕";
+            discardBtn.title = "Discard without using";
+            discardBtn.disabled = !cardId || !you.alive;
+            discardBtn.onclick = () => hooks.discardCard(i);
+            row.appendChild(discardBtn);
+          }
 
           dom.hand.appendChild(row);
         }
@@ -1278,7 +1300,9 @@ const Render = (() => {
       if (dom.autoBuyStatus) {
         const hasRoom = you.hand.includes(null);
         const needed = Math.max(0, C.CardDrawCost - you.coins);
-        dom.autoBuyStatus.textContent = !you.alive ? "Auto-buy paused"
+        dom.autoBuyStatus.textContent = shopMode
+          ? (!you.alive ? "Shop unavailable" : "Pick 1–3 · reroll with 4")
+          : !you.alive ? "Auto-buy paused"
           : !hasRoom ? "Hand full"
           : needed > 0 ? `Auto-buy in ${needed}c`
           : "Auto-buying…";
@@ -1341,6 +1365,13 @@ const Render = (() => {
       const cardId = you.hand[slot];
       if (!cardId) return false;
       const kind = Cards.TYPES[cardId].kind;
+      const shopMode = !!(snap.modes && snap.modes.roguelikeShop);
+      if (kind === "reroll") {
+        return shopMode && you.alive && you.coins >= C.ShopRerollCost;
+      }
+      const paid = Array.isArray(you.shopPaidSlots) && you.shopPaidSlots.includes(slot);
+      if (shopMode && you.alive && !paid && you.coins < C.CardDrawCost) return false;
+      if (snap.modes && snap.modes.publicSeconds && kind === "magnify") return false;
       // Eliminated players only ever hold their per-round ghost item — one
       // of the global-effect cards — and can fire it like anyone's card.
       if (!you.alive) return kind === "speed" || kind === "blackout" || kind === "reverse";
