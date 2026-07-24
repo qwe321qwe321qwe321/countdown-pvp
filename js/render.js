@@ -1274,6 +1274,9 @@ const Render = (() => {
     // fixed Magnifying Glass, attack roll, defense roll, unrestricted roll.
     const roundIds = snap.roundCardPool || [];
     const shopMode = !!(snap.modes && snap.modes.roguelikeShop);
+    const rerollCost = snap.modes && snap.modes.roguelikeRerollRefresh
+      ? C.RoguelikeRerollRefreshCost
+      : C.ShopRerollCost;
     const codexSig = JSON.stringify([snap.roundNumber, roundIds, shopMode]);
     if (dom.cardCodex && codexSig !== lastCodexSig) {
       lastCodexSig = codexSig;
@@ -1308,7 +1311,7 @@ const Render = (() => {
 
     if (you) {
       if (dom.handTitle) dom.handTitle.textContent = shopMode
-        ? `Choose & use (${C.CardDrawCost}c each · 1-3) or reroll (${C.ShopRerollCost}c · 4)`
+        ? `Choose & use (${C.CardDrawCost}c each · 1-3) or reroll (${rerollCost}c · 4)`
         : "Hand (1-5 or click)";
       // Mirrors Sim.coinIntervalScale: scale by the *current* alive count, not
       // the fixed seat count, so the shown rate speeds up as players die.
@@ -1370,7 +1373,7 @@ const Render = (() => {
             const def = Cards.TYPES[cardId];
             const paid = Array.isArray(you.shopPaidSlots) && you.shopPaidSlots.includes(i);
             const price = shopMode
-              ? (paid ? " · PAID" : ` · ${def.kind === "reroll" ? C.ShopRerollCost : C.CardDrawCost}c`)
+              ? (paid ? " · PAID" : ` · ${def.kind === "reroll" ? rerollCost : C.CardDrawCost}c`)
               : "";
             useBtn.innerHTML = `<span class="cardEmoji">${def.emoji}</span><span class="cardLabel">${i + 1}. ${def.name}${price}</span>`;
             useBtn.disabled = !usable(i);
@@ -1470,7 +1473,10 @@ const Render = (() => {
       const kind = Cards.TYPES[cardId].kind;
       const shopMode = !!(snap.modes && snap.modes.roguelikeShop);
       if (kind === "reroll") {
-        return shopMode && you.alive && you.coins >= C.ShopRerollCost;
+        const cost = snap.modes && snap.modes.roguelikeRerollRefresh
+          ? C.RoguelikeRerollRefreshCost
+          : C.ShopRerollCost;
+        return shopMode && you.alive && you.coins >= cost;
       }
       const paid = Array.isArray(you.shopPaidSlots) && you.shopPaidSlots.includes(slot);
       if (shopMode && you.alive && !paid && you.coins < C.CardDrawCost) return false;

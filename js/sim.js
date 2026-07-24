@@ -959,8 +959,11 @@ const Sim = (() => {
   }
 
   function rerollShop(sim, p) {
-    if (!sim.modes.roguelikeShop || !p.alive || p.coins < C.ShopRerollCost) return;
-    p.coins -= C.ShopRerollCost;
+    const cost = sim.modes.roguelikeRerollRefresh
+      ? C.RoguelikeRerollRefreshCost
+      : C.ShopRerollCost;
+    if (!sim.modes.roguelikeShop || !p.alive || p.coins < cost) return;
+    p.coins -= cost;
     p.gunPending = null;
     p.shopPaidSlots.clear();
     refillAllShopChoices(sim, p, true);
